@@ -102,26 +102,46 @@ size_t DiskMap::get_split_index() {
 
 size_t DiskMap::allocate_page() {
   // Find a freed page if it exists
-  int64_t *freed_page_idx = (int64_t *)get_addr(1, 8);
+  int64_t *first_entry = (int64_t *)get_addr(1, 8);
 
-  if (*freed_page_idx != -1) {
-    // find newest freed list page
-    int64_t current_list_page = 1;
-    while (current_list_page > -1) {
-      current_list_page = *(int64_t *)get_addr(current_list_page, 0);
+  if (*first_entry != -1) {
+    // Find newest freed list page
+    int64_t prev_fpl_page = -1;
+    int64_t fpl_page = 1;
+    while (*(int64_t *)get_addr(fpl_page, 0) != -1) {
+      prev_fpl_page = fpl_page;
+      fpl_page = *(int64_t *)get_addr(fpl_page, 0);
     }
 
-    // find index of newest freed page
-    freed_page_idx = (int64_t *)get_addr(current_list_page, 8);
-    for (; freed_page_idx < (int64_t *)get_addr(current_list_page + 1, 0); freed_page_idx++) {
-      if (*freed_page_idx == -1) {
-        return *(freed_page_idx - 1);
+    // Find first non-(-1) entry from the end of the page
+    int64_t *page_end = (int64_t *)get_addr(fpl_page + 1, 0);
+    int64_t *freed_page = page_end - 1;
+    while (freed_page >= (int64_t *)get_addr(fpl_page, 8) &&
+           *freed_page == -1) {
+      freed_page--;
+    }
+
+    if (freed_page >= (int64_t *)get_addr(fpl_page, 8)) {
+      // Found a valid freed page
+      size_t result = *freed_page;
+      *freed_page = -1;
+
+      // If this was the last non-(-1) entry in a non-first FPL page,
+      // unlink this page from the list
+      if (freed_page == (int64_t *)get_addr(fpl_page, 8) && fpl_page != 1) {
+        *(int64_t *)get_addr(prev_fpl_page, 0) = -1;
       }
+
+      // Update the first entry pointer if we just used the last freed page
+      if (fpl_page == 1 && freed_page == (int64_t *)get_addr(1, 8)) {
+        *first_entry = -1;
+      }
+
+      return result;
     }
-  } else {
-    return *next_free_page();
   }
 
-  // Something has gone very wrong
-  throw DiskMapException("Failed to allocate page (this should never happen)");
+  // No freed pages available, allocate a new one
+  (*next_free_page())++;
+  return *next_free_page() - 1;
 }
