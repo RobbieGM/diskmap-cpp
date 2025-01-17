@@ -85,25 +85,46 @@ void DiskMap::remap(size_t num_pages) {
 }
 
 void *DiskMap::get_addr(size_t page, int offset) {
-  return static_cast<char*>(mapped) + PAGE_SIZE * page + offset;
+  return static_cast<char *>(mapped) + PAGE_SIZE * page + offset;
 }
 
-size_t *DiskMap::kv_entry_count() {
-  return (size_t*) get_addr(0, 8);
-}
+size_t *DiskMap::kv_entry_count() { return (size_t *)get_addr(0, 8); }
 
-size_t *DiskMap::next_free_page() {
-  return (size_t*) get_addr(0, 16);
-}
+size_t *DiskMap::next_free_page() { return (size_t *)get_addr(0, 16); }
 
-size_t *DiskMap::dir_entry_count() {
-  return (size_t*) get_addr(0, 24);
-}
+size_t *DiskMap::dir_entry_count() { return (size_t *)get_addr(0, 24); }
 
 size_t DiskMap::get_split_index() {
-  
+  // Return dir_entry_count with MSB set to zero, because split index starts
+  // over at 0 after reaching a power of 2
+  size_t i = 1;
+  while (i <= *dir_entry_count())
+    i *= 2;
+  return *dir_entry_count() ^ (i / 2);
 }
 
-// void DiskMap::write_integer(void *target, int64_t num) {
-//   *(int64_t*)target = num;
-// }
+size_t DiskMap::allocate_page() {
+  // Find a free page in the list of holes if it exists
+  int64_t free_pages_entry_page = 1;
+  while (true) {
+    int64_t next_free_pages_entry_page =
+        *(int64_t *)get_addr(free_pages_entry_page, 0);
+    // remove this for loop
+    for (int64_t *addr = (int64_t *)get_addr(free_pages_entry_page, 8);
+         addr < (int64_t *)get_addr(free_pages_entry_page + 1, 0); addr++) {
+      if (*addr == -1) {
+        // No free pages
+        (*next_free_page())++;
+        return *next_free_page() - 1;
+      } else {
+        // Found a free page
+        // TODO: clear this entry and move another free page entry here and set
+        // it to -1
+        return *addr;
+      }
+    }
+    free_pages_entry_page = next_free_pages_entry_page;
+  }
+  // Something has gone very wrong
+  throw DiskMapException("Failed to allocate page (this should never happen)");
+}
