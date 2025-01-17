@@ -18,14 +18,11 @@ DiskMap::DiskMap(whl::string path) {
   remap(3);
 
   if (was_created) {
-    // copy magic string to first 8 bytes of page 0
-    // rest of page 0 is already initialized to 0 by default
     memcpy(mapped, MAGIC, 8);
+    *next_free_page() = 3;
 
-    // set all of page 1 to -1
     memset(get_addr(1, 0), -1, PAGE_SIZE);
 
-    // set all of page 2 to -1
     memset(get_addr(2, 0), -1, PAGE_SIZE);
   } else {
     // Check for magic string
@@ -104,27 +101,27 @@ size_t DiskMap::get_split_index() {
 }
 
 size_t DiskMap::allocate_page() {
-  // Find a free page in the list of holes if it exists
-  int64_t free_pages_entry_page = 1;
-  while (true) {
-    int64_t next_free_pages_entry_page =
-        *(int64_t *)get_addr(free_pages_entry_page, 0);
-    // remove this for loop
-    for (int64_t *addr = (int64_t *)get_addr(free_pages_entry_page, 8);
-         addr < (int64_t *)get_addr(free_pages_entry_page + 1, 0); addr++) {
-      if (*addr == -1) {
-        // No free pages
-        (*next_free_page())++;
-        return *next_free_page() - 1;
-      } else {
-        // Found a free page
-        // TODO: clear this entry and move another free page entry here and set
-        // it to -1
-        return *addr;
+  // Find a freed page if it exists
+  int64_t *freed_page_idx = (int64_t *)get_addr(1, 8);
+
+  if (*freed_page_idx != -1) {
+    // find newest freed list page
+    int64_t current_list_page = 1;
+    while (current_list_page > -1) {
+      current_list_page = *(int64_t *)get_addr(current_list_page, 0);
+    }
+
+    // find index of newest freed page
+    freed_page_idx = (int64_t *)get_addr(current_list_page, 8);
+    for (; freed_page_idx < (int64_t *)get_addr(current_list_page + 1, 0); freed_page_idx++) {
+      if (*freed_page_idx == -1) {
+        return *(freed_page_idx - 1);
       }
     }
-    free_pages_entry_page = next_free_pages_entry_page;
+  } else {
+    return *next_free_page();
   }
+
   // Something has gone very wrong
   throw DiskMapException("Failed to allocate page (this should never happen)");
 }
