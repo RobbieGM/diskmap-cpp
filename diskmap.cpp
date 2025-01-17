@@ -4,7 +4,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 
-const char *DiskMap::magic = "DISKMAP";
+const char *DiskMap::MAGIC = "DISKMAP";
 
 DiskMap::DiskMap(whl::string path) {
   fd = open(path.c_str(), O_RDWR | O_CREAT | O_EXCL, 0666);
@@ -18,9 +18,18 @@ DiskMap::DiskMap(whl::string path) {
   remap(3);
 
   if (was_created) {
+    // copy magic string to first 8 bytes of page 0
+    // rest of page 0 is already initialized to 0 by default
+    memcpy(mapped, MAGIC, 8);
+
+    // set all of page 1 to -1
+    memset(get_addr(1, 0), -1, PAGE_SIZE);
+
+    // set all of page 2 to -1
+    memset(get_addr(2, 0), -1, PAGE_SIZE);
   } else {
     // Check for magic string
-    if (memcmp(mapped, DiskMap::magic, 8) != 0) {
+    if (memcmp(mapped, DiskMap::MAGIC, 8) != 0) {
       throw DiskMapException("Invalid diskmap file");
     }
   }
@@ -28,14 +37,12 @@ DiskMap::DiskMap(whl::string path) {
 
 DiskMap::~DiskMap() {
   close(fd);
-  munmap(mapped, num_mapped_pages * page_size);
+  munmap(mapped, num_mapped_pages * PAGE_SIZE);
 }
 
 void DiskMap::remap(size_t num_pages) {
-  page_size = getpagesize();
-
   // Extend file size if needed
-  size_t required_size = num_pages * page_size;
+  size_t required_size = num_pages * PAGE_SIZE;
   if (ftruncate(fd, required_size) == -1) {
     perror("Failed to extend file size");
     exit(1);
@@ -44,7 +51,7 @@ void DiskMap::remap(size_t num_pages) {
   if (mapped && num_mapped_pages > 0) {
 #ifdef __linux__
     // Resize existing mapping using mremap on Linux
-    void *new_addr = mremap(mapped, num_mapped_pages * page_size, required_size,
+    void *new_addr = mremap(mapped, num_mapped_pages * PAGE_SIZE, required_size,
                             MREMAP_MAYMOVE);
     if (new_addr == MAP_FAILED) {
       perror("Failed to remap memory");
@@ -53,7 +60,7 @@ void DiskMap::remap(size_t num_pages) {
     mapped = new_addr;
 #else
     // Fall back to munmap + mmap on non-Linux POSIX systems
-    if (munmap(mapped, num_mapped_pages * page_size) == -1) {
+    if (munmap(mapped, num_mapped_pages * PAGE_SIZE) == -1) {
       perror("Failed to unmap existing mapping");
       exit(1);
     }
@@ -76,3 +83,27 @@ void DiskMap::remap(size_t num_pages) {
 
   num_mapped_pages = num_pages;
 }
+
+void *DiskMap::get_addr(size_t page, int offset) {
+  return static_cast<char*>(mapped) + PAGE_SIZE * page + offset;
+}
+
+size_t *DiskMap::kv_entry_count() {
+  return (size_t*) get_addr(0, 8);
+}
+
+size_t *DiskMap::next_free_page() {
+  return (size_t*) get_addr(0, 16);
+}
+
+size_t *DiskMap::dir_entry_count() {
+  return (size_t*) get_addr(0, 24);
+}
+
+size_t DiskMap::get_split_index() {
+  
+}
+
+// void DiskMap::write_integer(void *target, int64_t num) {
+//   *(int64_t*)target = num;
+// }

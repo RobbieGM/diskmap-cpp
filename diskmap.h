@@ -11,12 +11,17 @@ private:
 };
 
 class DiskMap {
-  static const char *magic;
+  static const int PAGE_SIZE = 4096;
+  static const char *MAGIC;
   int fd;
-  int page_size;
-  size_t entries;
   void *mapped;
   size_t num_mapped_pages;
+
+  void *get_addr(size_t page, int offset);
+  size_t *kv_entry_count();
+  size_t *next_free_page();
+  size_t *dir_entry_count();
+  size_t get_split_index();
 
 public:
   // Initialize a DiskMap, loading from the given path or creating a new file to
