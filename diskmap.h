@@ -15,16 +15,17 @@ class DiskMap {
   static const char *MAGIC;
   int fd;
   void *mapped;
-  size_t num_mapped_pages;
+  int64_t num_mapped_pages;
 
-  void remap(size_t num_pages);
-  void *get_addr(size_t page, int offset);
-  size_t *kv_entry_count();
-  size_t *next_free_page();
-  size_t *dir_entry_count();
-  size_t get_split_index();
+  void remap(int64_t num_pages);
+  void *get_addr(int64_t page, int offset);
+  int64_t *kv_entry_count();
+  int64_t *next_free_page();
+  int64_t *dir_entry_count();
+  int64_t get_split_index();
 
-  size_t allocate_page();
+  int64_t allocate_page();
+  void free_page(int64_t page);
 
 public:
   // Initialize a DiskMap, loading from the given path or creating a new file to
@@ -34,6 +35,6 @@ public:
 
   // Sets buffer to the location in (mmaped) memory where the value of the key
   // is found. Returns the length of the value.
-  size_t read(whl::string key, void *&buffer);
-  void write(whl::string key, void *buffer, size_t length);
+  int64_t read(whl::string key, void *&buffer);
+  void write(whl::string key, void *buffer, int64_t length);
 };
