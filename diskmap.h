@@ -12,6 +12,7 @@ private:
 
 class DiskMap {
   static const int PAGE_SIZE = 4096;
+  static const int FPL_PAGE_CAPACITY = PAGE_SIZE / 8 - 2;
   static const char *MAGIC;
   int fd;
   void *mapped;
@@ -21,9 +22,16 @@ class DiskMap {
   void *get_addr(int64_t page, int offset);
   int64_t *kv_entry_count();
   int64_t *next_free_page();
-  int64_t *dir_entry_count();
-  int64_t get_split_index();
+  int64_t *last_fpl_page();
+  // index into last page in FPL list (last non-empty entry), or -1 if empty
+  int64_t *last_fpl_page_entries();
 
+  void fpl_init(int64_t page);
+  int64_t *fpl_previous(int64_t page);
+  int64_t *fpl_next(int64_t page);
+  int64_t *fpl_entry(int64_t page, int64_t index);
+
+  // Allocate a new page. May contain undefined data
   int64_t allocate_page();
   void free_page(int64_t page);
 
