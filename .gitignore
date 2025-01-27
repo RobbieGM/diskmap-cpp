@@ -3,3 +3,4 @@
 *.dm
 test_*
 !*.cpp
+fnv_collide.py

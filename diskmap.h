@@ -1,5 +1,10 @@
+#pragma once
+#include "page_types.h"
 #include <cstddef>
+#include <cstdint>
 #include <wheel.h>
+
+namespace diskmap {
 
 class DiskMapException {
 public:
@@ -10,42 +15,72 @@ private:
   whl::string message_;
 };
 
-class DiskMap {
-  using order_t = unsigned char; // 0-MAX_ORDER
-  static const order_t MAX_ORDER = 38;
-  static const int PAGE_SIZE = 4096;
-  static const int FPL_PAGE_CAPACITY = PAGE_SIZE / 8 - 2;
-  static const char *MAGIC;
-  int fd;
-  void *mapped;
-  int64_t num_mapped_pages;
-
-  void remap(int64_t num_pages);
-  void *get_addr(int64_t page, int offset);
-  int64_t *kv_entry_count();
-  int64_t *next_free_page();
-  int64_t *last_fpl_page(order_t order);
-  // index into last page in FPL list (last non-empty entry), or -1 if empty
-  int *last_fpl_page_entries(order_t order);
-
-  void fpl_init(int64_t page);
-  int64_t *fpl_previous(int64_t page);
-  int64_t *fpl_next(int64_t page);
-  int64_t *fpl_entry(int64_t page, int64_t index);
+class LockManager {
+  whl::unordered_map<int64_t, whl::mutex> locks;
+  whl::mutex internal;
 
 public:
-  // Initialize a DiskMap, loading from the given path or creating a new file to
-  // back the map at that path
-  DiskMap(whl::string path);
-  ~DiskMap();
+  whl::mutex_guard get_guard(int64_t page);
+};
 
-  // Sets buffer to the location in (mmaped) memory where the value of the key
-  // is found. Returns the length of the value.
-  int64_t read(whl::string key, void *&buffer);
-  void write(whl::string key, void *buffer, int64_t length);
-  void append(whl::string key, void *buffer, int64_t length);
+class DiskMap {
+  static const char *MAGIC;
+  static const int64_t ROOT_PAGE = 1;
+  static const int64_t MMAPPED_PAGES =
+      1ULL << 32; // 128 TiB, half of virtual address space
+  size_t file_pages;
+  int fd;
+  void *mapped;
+  LockManager lock_manager;
+
+  struct HeldNode {
+    int64_t page;
+    enum { INTERNAL_NODE, LEAF_NODE } type;
+  };
+
+  void extend_file(int64_t num_pages);
+  void *get_addr(int64_t page, int offset);
+  MetaPage *meta() { return static_cast<MetaPage *>(get_addr(0, 0)); }
+  FPLPage *fpl(int64_t page) {
+    return static_cast<FPLPage *>(get_addr(page, 0));
+  }
+  InternalNodePage *internal_node(int64_t page) {
+    return static_cast<InternalNodePage *>(get_addr(page, 0));
+  }
+  LeafNodePage *leaf_node(int64_t page) {
+    return static_cast<LeafNodePage *>(get_addr(page, 0));
+  }
 
   // Allocate a new page. May contain undefined data
   int64_t allocate_page(order_t order);
   void free_page(int64_t page, order_t order);
+
+  int64_t get_bucket(uint64_t hash, int64_t depth);
+
+  // Helper method to find entry position in leaf node
+  // Returns pointer to entry start, or nullptr if not found
+  char *find_entry_in_leaf(LeafNodePage *leaf, const whl::string &key);
+
+  whl::vector<KVEntry> get_entries_in_leaf(LeafNodePage *leaf);
+
+  void create_subtree(int64_t *parent_entry, int depth,
+                      const whl::vector<KVEntry> &entries);
+
+  template <typename T> friend class PageRef;
+
+public:
+  // Initialize a DiskMap, loading from the given path or creating a new file
+  // to back the map at that path
+  DiskMap(whl::string path);
+  ~DiskMap();
+
+  whl::vector<char> read(whl::string key, bool &found);
+  void write(whl::string key, const void *buffer, int64_t length);
+  void append(whl::string key, void *buffer, int64_t length);
+  bool remove(whl::string key);
+
+  void debug_dump();
+  void debug_dump_recursive(int64_t page, int indent_level);
 };
+
+}; // namespace diskmap
