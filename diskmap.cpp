@@ -497,6 +497,9 @@ bool DiskMap::remove(whl::string key) {
       if (bytes_to_move > 0) {
         memmove(entry, next_entry, bytes_to_move);
       }
+      // Clear the last entry_size bytes starting from the new location of the
+      // final entry
+      memset(&leaf->data + leaf->usage - entry_size, 0, entry_size);
 
       leaf->usage -= entry_size;
       leaf->entry_count--;
@@ -504,41 +507,37 @@ bool DiskMap::remove(whl::string key) {
 
       // If leaf is now empty, we need to handle unlinking and potential
       // collapse
-      if (leaf->entry_count == 0 &&
-          path.size() > 0) { // Don't free root's immediate children
-        PathEntry current = path.back();
-        path.pop_back();
-
+      //            root                                parent
+      // path = [(1, bucket(hash, 0), null), ..., (41, bucket(hash, 1),
+      // grandparent_entry_ptr)]
+      // path.size() = 1 -> child of root path.size() must be 2 or greater to
+      // collapse parent with sibling
+      if (leaf->entry_count == 0 && grandparent_entry_ptr != nullptr) {
         // Free the leaf node
         free_page(page, leaf->order);
+        *parent_entry_ptr = -1;
 
-        if (path.size() > 0) { // If we're not at root level
           // Check parent's children
-          InternalNodePage *parent = internal_node(clear_msb(current.page));
-          int child_count = 0;
-          int64_t last_child = -1;
-          // int last_bucket = -1;
+        InternalNodePage *parent = internal_node(clear_msb(parent_page));
+        int parent_child_count = 0;
+        int64_t sibling = -1;
 
           for (int i = 0; i < InternalNodePage::BRANCHING_FACTOR; i++) {
             if (parent->entries[i] != -1) {
-              child_count++;
-              last_child = parent->entries[i];
-              // last_bucket = i;
+            sibling = parent->entries[i];
+            parent_child_count++;
+            if (parent_child_count > 1) {
+              break;
             }
           }
+        }
 
-          // If parent has only one child after deletion
-          if (child_count == 1 && current.page != ROOT_PAGE) {
-            PathEntry parent_entry = path.back();
-
+        if (parent_child_count == 1) {
             // Update grandparent to point to the sibling
-            if (parent_entry.parent_entry_ptr) {
-              *parent_entry.parent_entry_ptr = last_child;
-            }
+          *grandparent_entry_ptr = sibling;
 
             // Free the parent node
-            free_page(clear_msb(current.page), 0);
-          }
+          free_page(clear_msb(parent_page), 0);
         }
       }
       return true;
@@ -555,8 +554,9 @@ bool DiskMap::remove(whl::string key) {
     }
 
     // Save path information
-    path.push_back({page, bucket, parent_entry_ptr});
+    grandparent_entry_ptr = parent_entry_ptr;
     parent_entry_ptr = &node->entries[bucket];
+    parent_page = page;
     page = node->entries[bucket];
     depth++;
   }
