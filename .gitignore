@@ -3,6 +3,7 @@
 *.dm
 test_*
 test
+!test_*.out.correct
 __pycache__
 !*.cpp
 fnv_collide.py
