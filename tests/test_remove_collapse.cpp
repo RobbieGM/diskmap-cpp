@@ -13,9 +13,14 @@ int main() {
   map.write("dz", static_cast<const void *>(long_value), sizeof(long_value));
   map.write("uJi", static_cast<const void *>(long_value), sizeof(long_value));
 
+  // Should show internal node with two leaves
+  printf("Before remove:\n");
+  map.debug_dump();
+
   assert(map.remove("dz"));
 
   // Should show leaf node with one entry as direct child of root
+  printf("\nAfter remove:\n");
   map.debug_dump();
 
   return 0;
