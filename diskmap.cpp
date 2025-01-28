@@ -462,16 +462,10 @@ whl::vector<char> DiskMap::read(whl::string key, bool &found) {
 bool DiskMap::remove(whl::string key) {
   // ROOT_PAGE marked as internal with MSB set
   int64_t page = set_msb(ROOT_PAGE, 1);
-  int depth = 0;
-
-  // Stack to keep track of path from root to leaf
-  struct PathEntry {
-    int64_t page;
-    int64_t bucket;
-    int64_t *parent_entry_ptr;
-  };
-  whl::vector<PathEntry> path;
+  int64_t parent_page = -1;
   int64_t *parent_entry_ptr = nullptr;
+  int64_t *grandparent_entry_ptr = nullptr;
+  int depth = 0;
 
   while (true) {
     if (!get_msb(page)) {
