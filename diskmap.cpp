@@ -562,7 +562,8 @@ bool DiskMap::remove(whl::string key) {
   }
 }
 
-void DiskMap::debug_dump_recursive(int64_t page, int indent_level) {
+void DiskMap::debug_dump_recursive(int64_t page, int indent_level,
+                                   int parent_index) {
   // Print indentation
   for (int i = 0; i < indent_level; i++) {
     printf("  ");
@@ -571,31 +572,51 @@ void DiskMap::debug_dump_recursive(int64_t page, int indent_level) {
   // Check if page is an internal node by checking MSB
   if (get_msb(page)) {
     int64_t actual_page = clear_msb(page);
-    printf("Page %ld (internal)\n", actual_page);
+    printf("Page %ld (internal, parent_index=%d)\n", actual_page, parent_index);
 
     // Recursively process all non-empty entries
     InternalNodePage *node = internal_node(actual_page);
     for (int i = 0; i < InternalNodePage::BRANCHING_FACTOR; i++) {
       if (node->entries[i] != -1) {
-        debug_dump_recursive(node->entries[i], indent_level + 1);
+        debug_dump_recursive(node->entries[i], indent_level + 1, i);
       }
     }
   } else {
     // Leaf node
-    printf("Page %ld (leaf)\n", page);
     LeafNodePage *leaf = leaf_node(page);
+    printf("Page %ld (leaf, parent_index=%d, entry_count=%d, order=%d, "
+           "usage=%zu)\n",
+           page, parent_index, leaf->entry_count, leaf->order, leaf->usage);
 
-    // Get all entries in the leaf node
-    auto entries = get_entries_in_leaf(leaf);
+    char *ptr = static_cast<char *>(&leaf->data);
+    int entry_count = 0;
 
-    // Print each entry with additional indentation
-    for (size_t i = 0; i < entries.size(); i++) {
-      auto &entry = entries[i];
+    while (ptr < leaf->end()) {
+      if (*ptr == '\0') { // Empty key marks end of entries
+        break;
+      }
+
       for (int i = 0; i < indent_level + 1; i++) {
         printf("  ");
       }
-      printf("Key: %s, Value length: %zu\n", entry.key.c_str(),
-             entry.value.size());
+      printf("Key: %s, ", ptr);
+      ptr += strlen(ptr) + 1;
+      printf("Value length: %zu\n", *reinterpret_cast<uint64_t *>(ptr));
+      ptr += sizeof(uint64_t) + *reinterpret_cast<uint64_t *>(ptr);
+      entry_count++;
+    }
+
+    // Ensure unused space is zeroed
+    while (ptr < leaf->end()) {
+      if (*ptr != 0) {
+        printf("Leaf corrupted at %lx\n", ptr - static_cast<char *>(mapped));
+        break;
+      }
+      ptr++;
+    }
+    if (leaf->entry_count != entry_count) {
+      printf("Leaf entry count mismatch: %d (recorded) != %d (actual)\n",
+             leaf->entry_count, entry_count);
     }
   }
 }
@@ -605,7 +626,7 @@ void DiskMap::debug_dump() {
   printf("Page 0 (metadata):\n");
   printf("  kv_entry_count: %ld\n", meta->kv_entry_count);
   printf("  next_free_page: %ld\n", meta->next_free_page);
-  debug_dump_recursive(set_msb(ROOT_PAGE, 1), 0);
+  debug_dump_recursive(set_msb(ROOT_PAGE, 1), 0, -1);
 }
 
 }; // namespace diskmap

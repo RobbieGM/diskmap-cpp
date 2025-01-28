@@ -80,7 +80,7 @@ public:
   bool remove(whl::string key);
 
   void debug_dump();
-  void debug_dump_recursive(int64_t page, int indent_level);
+  void debug_dump_recursive(int64_t page, int indent_level, int parent_index);
 };
 
 }; // namespace diskmap
