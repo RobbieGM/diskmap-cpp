@@ -12,8 +12,9 @@ int main() {
   map.write("uJi", static_cast<const void *>(short_value), sizeof(short_value));
   map.write("444", static_cast<const void *>(short_value), sizeof(short_value));
 
-  map.remove("dz");
-  map.remove("444");
+  assert(map.remove("dz"));
+  assert(map.remove("444"));
+  assert(!map.remove("dz"));
 
   bool found;
   map.read("111", found);
