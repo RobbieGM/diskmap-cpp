@@ -232,6 +232,7 @@ void DiskMap::create_subtree(int64_t *parent_entry, int depth,
     LeafNodePage *new_leaf = leaf_node(new_leaf_page_number);
     new_leaf->init(order);
     new_leaf->usage = total_entries_size;
+    new_leaf->entry_count = entries.size();
 
     auto *ptr = static_cast<char *>(&new_leaf->data);
     for (size_t i = 0; i < entries.size(); i++) {
