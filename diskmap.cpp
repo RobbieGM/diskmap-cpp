@@ -97,8 +97,9 @@ int64_t DiskMap::allocate_page(order_t order) {
 
   (meta()->last_fpl_page_entries[order])--;
 
-  // If current page becomes empty, move to previous page
-  if (meta()->last_fpl_page_entries[order] == 0 && fpl_page != 1) {
+  // If current page becomes empty, move to previous page if it exists
+  if (meta()->last_fpl_page_entries[order] == 0 &&
+      fpl(fpl_page)->previous != -1) {
     meta()->last_fpl_page[order] = fpl(fpl_page)->previous;
     meta()->last_fpl_page_entries[order] = FPL_PAGE_CAPACITY;
   }
