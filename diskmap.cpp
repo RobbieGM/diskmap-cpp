@@ -156,11 +156,11 @@ static int64_t get_msb(int64_t val) { return val >> 63; }
 static int64_t clear_msb(int64_t val) { return val & ~(1LL << 63); }
 
 int64_t DiskMap::get_bucket(uint64_t hash, int64_t depth) {
+  // Depth argument for get bucket refers to depth of internal node that is the
+  // parent of the node to be found
   // INNER_NODE_BRANCHING_FACTOR = 512 (for example)
-  // Depth = 0 means root node
   // Suppose hash = x + y * 512 + z * 512 * 512 + ...
-  // If depth = 0, return x, if depth = 1, return y
-  // get_bucket(hash, 0) determines the index within the root node, and so on
+  // If depth = 0, return x, if depth = 1, return y, etc.
 
   while (depth > 0) {
     hash /= InternalNodePage::BRANCHING_FACTOR;
@@ -300,8 +300,9 @@ void DiskMap::write(whl::string key, const void *buffer, int64_t length) {
   int64_t page = ROOT_PAGE;
   int depth = 0;
   int64_t *parent_entry = nullptr;
+  bool is_internal = true;
   // Traverse tree to find leaf node
-  while (true) {
+  while (is_internal) {
     InternalNodePage *internal = internal_node(page);
     int64_t idx = get_bucket(key.hash(), depth);
     if (internal->entries[idx] == -1) {
@@ -316,9 +317,8 @@ void DiskMap::write(whl::string key, const void *buffer, int64_t length) {
       return;
     } else if (get_msb(internal->entries[idx]) == 0) {
       // Found leaf node
-      page = clear_msb(internal->entries[idx]);
       parent_entry = &internal->entries[idx];
-      break;
+      is_internal = false;
     }
     page = clear_msb(internal->entries[idx]);
     depth++;
@@ -367,16 +367,15 @@ void DiskMap::write(whl::string key, const void *buffer, int64_t length) {
         // Rebuild tree
         meta()->kv_entry_count -= entries.size();
         create_subtree(parent_entry, depth, entries);
-        return;
+      } else {
+        // Move existing data to make room
+        size_t bytes_to_move =
+            static_cast<char *>(leaf->end()) - next_entry - additional_space;
+        memmove(next_entry + additional_space, next_entry, bytes_to_move);
+        memcpy(value_ptr, buffer, length);
+        *reinterpret_cast<uint64_t *>(value_length_ptr) = length;
+        leaf->usage += additional_space;
       }
-
-      // Move existing data to make room
-      size_t bytes_to_move =
-          static_cast<char *>(leaf->end()) - next_entry - additional_space;
-      memmove(next_entry + additional_space, next_entry, bytes_to_move);
-      memcpy(value_ptr, buffer, length);
-      *reinterpret_cast<uint64_t *>(value_length_ptr) = length;
-      leaf->usage += additional_space;
     }
   } else {
     // Append new entry
@@ -436,7 +435,7 @@ whl::vector<char> DiskMap::read(whl::string key, bool &found) {
       uint64_t length = *reinterpret_cast<uint64_t *>(entry);
       entry += sizeof(uint64_t);
 
-      // Create vector and copy the value
+      // Create vector and copy the value (TODO: return direct pointer)
       whl::vector<char> result(length);
       memcpy(result.data_ptr(), entry, length);
       found = true;
@@ -511,13 +510,13 @@ bool DiskMap::remove(whl::string key) {
         free_page(page, leaf->order);
         *parent_entry_ptr = -1;
 
-          // Check parent's children
+        // Check parent's children
         InternalNodePage *parent = internal_node(clear_msb(parent_page));
         int parent_child_count = 0;
         int64_t sibling = -1;
 
-          for (int i = 0; i < InternalNodePage::BRANCHING_FACTOR; i++) {
-            if (parent->entries[i] != -1) {
+        for (int i = 0; i < InternalNodePage::BRANCHING_FACTOR; i++) {
+          if (parent->entries[i] != -1) {
             sibling = parent->entries[i];
             parent_child_count++;
             if (parent_child_count > 1) {
@@ -527,10 +526,10 @@ bool DiskMap::remove(whl::string key) {
         }
 
         if (parent_child_count == 1) {
-            // Update grandparent to point to the sibling
+          // Update grandparent to point to the sibling
           *grandparent_entry_ptr = sibling;
 
-            // Free the parent node
+          // Free the parent node
           free_page(clear_msb(parent_page), 0);
         }
       }
