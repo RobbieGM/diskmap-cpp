@@ -565,7 +565,8 @@ void DiskMap::debug_dump_recursive(int64_t page, int indent_level,
   // Check if page is an internal node by checking MSB
   if (get_msb(page)) {
     int64_t actual_page = clear_msb(page);
-    printf("Page %ld (internal, parent_index=%d)\n", actual_page, parent_index);
+    printf("Page 0x%lx (internal, parent_index=%d)\n", actual_page,
+           parent_index);
 
     // Recursively process all non-empty entries
     InternalNodePage *node = internal_node(actual_page);
@@ -577,7 +578,7 @@ void DiskMap::debug_dump_recursive(int64_t page, int indent_level,
   } else {
     // Leaf node
     LeafNodePage *leaf = leaf_node(page);
-    printf("Page %ld (leaf, parent_index=%d, entry_count=%d, order=%d, "
+    printf("Page 0x%lx (leaf, parent_index=%d, entry_count=%d, order=%d, "
            "usage=%zu)\n",
            page, parent_index, leaf->entry_count, leaf->order, leaf->usage);
 
