@@ -425,7 +425,8 @@ whl::vector<char> DiskMap::read(whl::string key, bool &found) {
       char *entry = find_entry_in_leaf(leaf, key);
 
       if (!entry) {
-        throw DiskMapException("read: key not found");
+        found = false;
+        return whl::vector<char>();
       }
 
       // Skip past the key string
