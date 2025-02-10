@@ -4,7 +4,8 @@
 
 namespace diskmap {
 
-BufferPool::BufferPool(int fd, int pool_size) : fd(fd) {
+BufferPool::BufferPool(int fd, int pool_size)
+    : fd(fd), pool_size(pool_size), wal(nullptr) {
   pages.resize(pool_size);
   metadata.resize(pool_size);
 }
@@ -17,14 +18,14 @@ BufferPool::~BufferPool() {
 pool_index_t BufferPool::retain(file_index_t file_index, bool advise_eviction) {
   bool needs_read = false;
   bool evicted_needs_write = false;
-  file_index_t evicted_page_file_index;
-  size_t evicted_page_lsn;
-  pool_index_t pool_index;
+  file_index_t evicted_page_file_index = -1;
+  size_t evicted_page_lsn = -1;
+  pool_index_t pool_index = -1;
   {
     whl::mutex_guard _(&mutex);
     if (!file_to_pool_index.contains(file_index)) {
       // Prepare to load this page from the disk to the buffer pool
-      if (next_pool_index < POOL_SIZE) {
+      if (next_pool_index < pool_size) {
         // Use a free page
         pool_index = next_pool_index++;
       } else {
@@ -62,10 +63,11 @@ pool_index_t BufferPool::retain(file_index_t file_index, bool advise_eviction) {
     }
     // Potential future optimization: do this asynchronously
     pwrite(fd, pages[pool_index].data, PAGE_SIZE,
-           evicted_page_file_index * PAGE_SIZE);
+           static_cast<long>(evicted_page_file_index * PAGE_SIZE));
   }
   if (needs_read) {
-    pread(fd, pages[pool_index].data, PAGE_SIZE, file_index * PAGE_SIZE);
+    pread(fd, pages[pool_index].data, PAGE_SIZE,
+          static_cast<long>(file_index * PAGE_SIZE));
   }
   return pool_index;
 }
@@ -80,35 +82,53 @@ void BufferPool::release(pool_index_t pool_index) {
   }
 }
 
-BufferPool::PageHandle::PageHandle(BufferPool *pool, pool_index_t index,
+BufferPool::PageHandle::PageHandle(BufferPool *pool, file_index_t file_index,
                                    bool advise_eviction)
-    : pool(pool), index(index) {}
+    : pool(pool), pool_index(pool->retain(file_index, advise_eviction)) {}
 
 BufferPool::PageHandle::~PageHandle() {
   whl::mutex_guard _(&pool->mutex);
-  pool->release(index);
+  if (pool_index != -1) {
+    pool->release(pool_index);
+  }
+  pool_index = -1; // Makes double destructor safe, so explicit destructor can
+                   // be used in tests
 }
 
-char *BufferPool::PageHandle::data() { return pool->pages[index].data; }
+BufferPool::PageHandle::PageHandle(PageHandle &&other) noexcept
+    : pool(other.pool), pool_index(other.pool_index) {
+  other.pool_index = -1;
+}
+
+BufferPool::PageHandle &
+BufferPool::PageHandle::operator=(PageHandle &&other) noexcept {
+  if (this != &other) {
+    pool = other.pool;
+    pool_index = other.pool_index;
+    other.pool_index = -1;
+  }
+  return *this;
+}
+
+char *BufferPool::PageHandle::data() { return pool->pages[pool_index].data; }
 
 void BufferPool::PageHandle::modified_by(size_t lsn) {
-  pool->metadata[index].dirty = true;
-  if (lsn > pool->metadata[index].page_lsn) {
-    pool->metadata[index].page_lsn = lsn;
-  }
+  pool->metadata[pool_index].dirty = true;
+  pool->metadata[pool_index].page_lsn =
+      whl::max(lsn, pool->metadata[pool_index].page_lsn);
 }
 
 BufferPool::PageHandle BufferPool::get_page(file_index_t file_index,
                                             bool advise_eviction) {
-  pool_index_t index = retain(file_index, advise_eviction);
-  return PageHandle(this, index, advise_eviction);
+  return PageHandle(this, file_index, advise_eviction);
 }
 
 void BufferPool::flush_all() {
   whl::mutex_guard _(&mutex);
-  for (pool_index_t i = 0; i < POOL_SIZE; i++) {
+  for (pool_index_t i = 0; i < pool_size; i++) {
     if (metadata[i].dirty) {
-      pwrite(fd, pages[i].data, PAGE_SIZE, metadata[i].file_index * PAGE_SIZE);
+      pwrite(fd, pages[i].data, PAGE_SIZE,
+             static_cast<long>(metadata[i].file_index * PAGE_SIZE));
       metadata[i].dirty = false;
     }
   }

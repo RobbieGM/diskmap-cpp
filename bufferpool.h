@@ -64,8 +64,9 @@ public:
 // durability.
 class BufferPool {
   // Number of pages in the buffer pool.
-  constexpr static pool_index_t POOL_SIZE = 8192; // *4kB page = 32MiB
+  constexpr static pool_index_t DEFAULT_POOL_SIZE = 8192; // *4kB page = 32MiB
   int fd;
+  pool_index_t pool_size;
   AbstractWAL *wal;
   // Index of the next free slot in the buffer pool, limited to POOL_SIZE - 1.
   pool_index_t next_pool_index = 0;
@@ -90,15 +91,17 @@ public:
   // the buffer pool when created, and tracks page writes.
   class PageHandle {
     BufferPool *pool;
-    pool_index_t index;
+    pool_index_t pool_index;
 
-    PageHandle(BufferPool *pool, pool_index_t index, bool advise_eviction);
+    PageHandle(BufferPool *pool, file_index_t index, bool advise_eviction);
     friend class BufferPool;
 
   public:
     ~PageHandle();
     PageHandle(const PageHandle &) = delete;
     PageHandle &operator=(const PageHandle &) = delete;
+    PageHandle(PageHandle &&) noexcept;
+    PageHandle &operator=(PageHandle &&) noexcept;
 
     char *data();
     // Notify the page handle that the data has been modified by a log record
@@ -106,7 +109,12 @@ public:
     void modified_by(size_t lsn);
   };
 
-  BufferPool(int fd, int pool_size = POOL_SIZE);
+  BufferPool(const BufferPool &) = delete;
+  BufferPool(BufferPool &&) = delete;
+  BufferPool &operator=(const BufferPool &) = delete;
+  BufferPool &operator=(BufferPool &&) = delete;
+
+  explicit BufferPool(int fd, int pool_size = DEFAULT_POOL_SIZE);
   ~BufferPool();
   void set_wal(AbstractWAL *w) { wal = w; }
   PageHandle get_page(file_index_t file_index, bool advise_eviction = false);
