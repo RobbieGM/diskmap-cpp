@@ -18,29 +18,30 @@ enum class WALRecordType : uint8_t {
 
 struct WALCommonHeader {
   uint32_t checksum;
-  uint64_t lsn;
-  uint64_t txn_id;
+  uint32_t lsn;    // 32-bit LSN may overflow, but that's fine (and frequent
+                   // checkpointing will reset LSN anyway)
+  uint32_t txn_id; // Same with transaction ID
   WALRecordType type;
 } __attribute__((packed));
 
-// Represents setting a range of bytes to other bytes.
+// Represents setting a range of bytes to other bytes (within a page)
 // Sometimes, many bytes for the original or new value are all 0x00.
 // If these occur at the end of the range, they are considered fill bytes.
 struct SetRecord {
   uint64_t loc;           // Starting address of the range
-  uint32_t length;        // Total number of bytes that are set
-  uint32_t old_value_len; // Number of non-fill bytes that have been overwritten
-  uint32_t new_value_len; // Number of non-fill bytes making up the new value
+  uint16_t length;        // Total number of bytes that are set
+  uint16_t old_value_len; // Number of non-fill bytes that have been overwritten
+  uint16_t new_value_len; // Number of non-fill bytes making up the new value
   // Next bytes: first old_value_len bytes of the original value, then
   // new_value_len bytes of the new value
 } __attribute__((packed));
 
 // Represents undoing a SetRecord.
 struct CompensationRecord {
-  uint64_t undo_lsn;
+  uint32_t undo_lsn;
   uint64_t loc;
-  uint32_t length;
-  uint32_t new_value_len;
+  uint16_t length;
+  uint16_t new_value_len;
   // Next bytes: new_value_len bytes of the restored value
 } __attribute__((packed));
 
@@ -64,8 +65,8 @@ struct InMemoryWALRecord {
 class WAL : AbstractWAL {
   BufferPool *pool;
   int wal_fd;
-  uint64_t next_lsn = 0;
-  uint64_t next_txn_id = 0;
+  uint32_t next_lsn = 0;
+  uint32_t next_txn_id = 0;
   whl::mutex wal_mutex;
   size_t log_pos = 0;
   whl::vector<InMemoryWALRecord> records;
@@ -75,39 +76,46 @@ class WAL : AbstractWAL {
   int active_transactions = 0; // Number of currently running transactions. Not
                                // updated when recovering
   bool checkpoint_pending = false;
+  bool shutting_down = false;
   whl::thread checkpointing_thread;
-  whl::cv transaction_ended;
+  whl::cv checkpoint_cv;
   whl::cv checkpoint_done;
 
-  InMemoryWALRecord load_wal_record(size_t offset);
+  InMemoryWALRecord load_wal_record(size_t offset) const;
   void apply_record(InMemoryWALRecord &record);
   InMemoryWALRecord create_compensation_record(InMemoryWALRecord &record);
   void flush();
-  virtual void flush_up_to(size_t lsn);
+  void flush_up_to(size_t lsn) override;
   void checkpoint_internal();
   static void *checkpointing_thread_func(void *arg);
   void recover();
-  void sync_log();
+  void sync_log() const;
 
-  uint64_t begin(); // Returns txn id
-  void commit(uint64_t txn_id);
-  void abort(uint64_t txn_id);
-  void set(uint64_t txn_id, uint64_t loc, size_t length, size_t to_length,
+  uint32_t begin(); // Returns txn id
+  void commit(uint32_t txn_id);
+  void abort(uint32_t txn_id);
+  void set(uint32_t txn_id, uint64_t loc, size_t length, size_t to_length,
            const char *data);
 
   friend class Transaction;
   friend class PageHandle;
 
 public:
-  WAL(BufferPool *db, whl::string wal_path);
-  ~WAL();
+  WAL(BufferPool *pool, const whl::string &wal_path);
+  virtual ~WAL();
+
+  // Delete move/copy constructors and assignment operators
+  WAL(WAL &&) = delete;
+  WAL &operator=(WAL &&) = delete;
+  WAL(const WAL &) = delete;
+  WAL &operator=(const WAL &) = delete;
 
   class PageHandle {
     WAL *wal_layer;
     BufferPool::PageHandle page_handle;
-    uint64_t txn_id;
+    uint32_t txn_id;
     uint64_t page;
-    PageHandle(WAL *wal_layer, uint64_t txn_id, uint64_t page,
+    PageHandle(WAL *wal_layer, uint32_t txn_id, uint64_t page,
                bool advise_eviction);
     friend class WAL;
     friend class Transaction;
@@ -123,9 +131,13 @@ public:
 
   class Transaction {
     WAL *wal_layer;
-    uint64_t txn_id;
-    enum State { UNCOMMITTED, COMMITTED, ABORTED } state;
-    Transaction(WAL *wal_layer, uint64_t txn_id);
+    uint32_t txn_id;
+    enum class State : uint8_t { UNCOMMITTED, COMMITTED, ABORTED } state;
+    Transaction(WAL *wal_layer, uint32_t txn_id);
+    Transaction(const Transaction &) = delete;
+    Transaction(Transaction &&) = delete;
+    Transaction &operator=(const Transaction &) = delete;
+    Transaction &operator=(Transaction &&) = delete;
     friend class WAL;
     friend class PageHandle;
 

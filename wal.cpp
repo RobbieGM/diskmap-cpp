@@ -2,6 +2,7 @@
 #include "bufferpool.h"
 #include "diskmap.h"
 #include "page_types.h"
+#include <cstdint>
 #include <cstring>
 #include <fcntl.h>
 #include <pthread.h>
@@ -12,18 +13,20 @@ namespace diskmap {
 
 static size_t record_header_size(WALRecordType type) {
   if (type == WALRecordType::CLR) {
-    return sizeof(WALHeader) + sizeof(CompensationRecord);
-  } else if (type == WALRecordType::SET) {
-    return sizeof(WALHeader) + sizeof(SetRecord);
+    return sizeof(WALCommonHeader) + sizeof(CompensationRecord);
   }
-  return sizeof(WALHeader);
+  if (type == WALRecordType::SET) {
+    return sizeof(WALCommonHeader) + sizeof(SetRecord);
+  }
+  return sizeof(WALCommonHeader);
 }
 
 static size_t record_size(WALHeader &record) {
   size_t header_size = record_header_size(record.common_header.type);
   if (record.common_header.type == WALRecordType::CLR) {
     return header_size + record.compensation.new_value_len;
-  } else if (record.common_header.type == WALRecordType::SET) {
+  }
+  if (record.common_header.type == WALRecordType::SET) {
     return header_size + record.set.old_value_len + record.set.new_value_len;
   }
   return header_size;
@@ -33,19 +36,20 @@ static uint32_t checksum(const InMemoryWALRecord &record) {
   Checksum cs;
   // Digest header, starting after checksum field
   cs.digest(static_cast<const char *>(static_cast<const void *>(
-                &record.header.common_header.checksum + sizeof(uint32_t))),
+                &record.header.common_header.checksum)) +
+                sizeof(record.header.common_header.checksum),
             record_header_size(record.header.common_header.type) -
-                sizeof(uint32_t));
+                sizeof(record.header.common_header.checksum));
   // Digest variable-length data
-  cs.digest(
-      static_cast<const char *>(static_cast<const void *>(&record.data[0])),
-      record.data.size());
+  if (record.data.size() > 0) {
+    cs.digest(record.data.data_ptr(), record.data.size());
+  }
   return cs.value();
 }
 
 static size_t get_unpadded_length(size_t length, const char *data) {
   // Get number of bytes in data before the region of contiguous 0s at the end
-  for (size_t i = length - 1; i >= 0; i--) {
+  for (size_t i = length; i-- > 0;) {
     if (data[i] != 0) {
       return i + 1;
     }
@@ -53,11 +57,11 @@ static size_t get_unpadded_length(size_t length, const char *data) {
   return 0;
 }
 
-InMemoryWALRecord WAL::load_wal_record(size_t offset) {
-  WALHeader header;
+InMemoryWALRecord WAL::load_wal_record(size_t offset) const {
+  WALHeader header{};
   // Read as many bytes as the most possible required to read the whole header
   size_t max_header_size = sizeof(WALHeader);
-  ::pread(wal_fd, &header, max_header_size, offset);
+  ::pread(wal_fd, &header, max_header_size, static_cast<long>(offset));
   size_t header_size = record_header_size(header.common_header.type);
 
   // Read record data
@@ -65,7 +69,8 @@ InMemoryWALRecord WAL::load_wal_record(size_t offset) {
   InMemoryWALRecord result;
   result.header = header;
   result.data.resize(data_size);
-  ::pread(wal_fd, &result.data[0], data_size, offset + header_size);
+  ::pread(wal_fd, result.data.data_ptr(), data_size,
+          static_cast<long>(offset + header_size));
   return result;
 }
 
@@ -74,12 +79,12 @@ void WAL::apply_record(InMemoryWALRecord &record) {
     BufferPool::PageHandle handle =
         pool->get_page(record.header.compensation.loc / PAGE_SIZE, false);
     // Set new value
-    memcpy(handle.data() + record.header.compensation.loc % PAGE_SIZE,
-           &record.data[0], record.header.compensation.new_value_len);
+    memcpy(handle.data() + (record.header.compensation.loc % PAGE_SIZE),
+           record.data.data_ptr(), record.header.compensation.new_value_len);
     // Fill zeros after new value
     uint32_t zeros = record.header.compensation.length -
                      record.header.compensation.new_value_len;
-    memset(handle.data() + record.header.compensation.loc % PAGE_SIZE +
+    memset(handle.data() + (record.header.compensation.loc % PAGE_SIZE) +
                record.header.compensation.new_value_len,
            0, zeros);
 
@@ -88,12 +93,12 @@ void WAL::apply_record(InMemoryWALRecord &record) {
     BufferPool::PageHandle handle =
         pool->get_page(record.header.set.loc / PAGE_SIZE, false);
     // Set new value
-    memcpy(handle.data() + record.header.set.loc % PAGE_SIZE,
+    memcpy(handle.data() + (record.header.set.loc % PAGE_SIZE),
            &record.data[record.header.set.old_value_len],
            record.header.set.new_value_len);
     // Fill zeros after new value
     uint32_t zeros = record.header.set.length - record.header.set.new_value_len;
-    memset(handle.data() + record.header.set.loc % PAGE_SIZE +
+    memset(handle.data() + (record.header.set.loc % PAGE_SIZE) +
                record.header.set.new_value_len,
            0, zeros);
 
@@ -134,17 +139,20 @@ void WAL::flush() {
     uint32_t checksum = record.header.common_header.checksum;
     record.header.common_header.checksum = 0;
     ::pwrite(wal_fd, &record.header,
-             record_header_size(record.header.common_header.type), log_pos);
-    ::pwrite(wal_fd, &record.data[0], record.data.size(),
-             log_pos + record_header_size(record.header.common_header.type));
+             record_header_size(record.header.common_header.type),
+             static_cast<long>(log_pos));
+    ::pwrite(
+        wal_fd, record.data.data_ptr(), record.data.size(),
+        static_cast<long>(
+            log_pos + record_header_size(record.header.common_header.type)));
 
     // Correct checksum later to validate the whole record atomically
     record.header.common_header.checksum = checksum;
-    ::pwrite(
-        wal_fd, &record.header.common_header.checksum, sizeof(uint32_t),
-        log_pos +
-            reinterpret_cast<uint64_t>(&record.header.common_header.checksum) -
-            reinterpret_cast<uint64_t>(&record.header));
+    ::pwrite(wal_fd, &record.header.common_header.checksum, sizeof(uint32_t),
+             static_cast<long>(log_pos +
+                               reinterpret_cast<uint64_t>(
+                                   &record.header.common_header.checksum) -
+                               reinterpret_cast<uint64_t>(&record.header)));
 
     log_pos += record_size(record.header);
   }
@@ -166,7 +174,7 @@ void WAL::checkpoint_internal() {
 
   // Wait for all transactions to end
   while (active_transactions > 0) {
-    transaction_ended.wait(wal_mutex);
+    checkpoint_cv.wait(wal_mutex);
   }
 
   // Flush all data to disk
@@ -237,7 +245,7 @@ void WAL::recover() {
   }
 
   // Create CLRs for each record in reverse order
-  for (size_t j = to_undo_indices.size() - 1; j >= 0; j--) {
+  for (size_t j = to_undo_indices.size(); j-- > 0;) {
     size_t i = to_undo_indices[j];
     InMemoryWALRecord clr = create_compensation_record(records[i]);
     records.push_back(clr);
@@ -256,7 +264,7 @@ void WAL::recover() {
   });
 }
 
-void WAL::sync_log() {
+void WAL::sync_log() const {
   for (int attempts = 0; attempts < 3; attempts++) {
     if (fsync(wal_fd) == 0)
       return;
@@ -267,7 +275,7 @@ void WAL::sync_log() {
 
 // Functions for writing new log records (and modifying the database)
 
-size_t WAL::begin() {
+uint32_t WAL::begin() {
   whl::mutex_guard _(&wal_mutex);
   while (checkpoint_pending) {
     checkpoint_done.wait(wal_mutex);
@@ -284,7 +292,7 @@ size_t WAL::begin() {
   return new_record.header.common_header.lsn;
 }
 
-void WAL::commit(uint64_t txn_id) {
+void WAL::commit(uint32_t txn_id) {
   whl::mutex_guard _(&wal_mutex);
   InMemoryWALRecord new_record;
   new_record.header.common_header.type = WALRecordType::COMMIT;
@@ -296,10 +304,10 @@ void WAL::commit(uint64_t txn_id) {
 
   flush();
   active_transactions--;
-  transaction_ended.broadcast();
+  checkpoint_cv.broadcast();
 }
 
-void WAL::abort(uint64_t txn_id) {
+void WAL::abort(uint32_t txn_id) {
   whl::mutex_guard _(&wal_mutex);
   InMemoryWALRecord abort_begin;
   abort_begin.header.common_header.type = WALRecordType::ABORT_BEGIN;
@@ -335,7 +343,7 @@ void WAL::abort(uint64_t txn_id) {
     }
   }
   // Write CLRs
-  for (size_t i = to_undo_indices.size() - 1; i >= 0; i--) {
+  for (size_t i = to_undo_indices.size(); i-- > 0;) {
     InMemoryWALRecord clr =
         create_compensation_record(records[to_undo_indices[i]]);
     records.push_back(clr);
@@ -351,10 +359,10 @@ void WAL::abort(uint64_t txn_id) {
   apply_record(abort_end);
 
   active_transactions--;
-  transaction_ended.broadcast();
+  checkpoint_cv.broadcast();
 }
 
-void WAL::set(uint64_t txn_id, uint64_t loc, size_t length, size_t to_length,
+void WAL::set(uint32_t txn_id, uint64_t loc, size_t length, size_t to_length,
               const char *data) {
   whl::mutex_guard _(&wal_mutex);
   InMemoryWALRecord new_record;
@@ -365,7 +373,7 @@ void WAL::set(uint64_t txn_id, uint64_t loc, size_t length, size_t to_length,
   // Read old value
   BufferPool::PageHandle handle = pool->get_page(loc / PAGE_SIZE, false);
   char old_value[length];
-  memcpy(old_value, handle.data() + loc % PAGE_SIZE, length);
+  memcpy(old_value, handle.data() + (loc % PAGE_SIZE), length);
   size_t from_length = get_unpadded_length(length, old_value);
 
   // Set header
@@ -391,11 +399,11 @@ void *WAL::checkpointing_thread_func(void *arg) {
 
 // Public functions
 
-WAL::WAL(BufferPool *pool, whl::string wal_path)
-    : wal_mutex(), pool(pool),
-      checkpointing_thread(checkpointing_thread_func, this) {
+WAL::WAL(BufferPool *pool, const whl::string &wal_path)
+    : pool(pool), checkpointing_thread(checkpointing_thread_func, this) {
   pool->set_wal(this);
   whl::mutex_guard _(&wal_mutex);
+  // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer)
   wal_fd = open(wal_path.c_str(), O_RDWR | O_CREAT | O_EXCL, 0666);
   bool was_created = wal_fd > 0;
   if (!was_created) {
@@ -408,6 +416,9 @@ WAL::WAL(BufferPool *pool, whl::string wal_path)
 }
 
 WAL::~WAL() {
+  shutting_down = true;
+  checkpoint_cv.broadcast();
+  checkpointing_thread.join();
   sync_log();
   close(wal_fd);
 }
@@ -416,10 +427,13 @@ void WAL::checkpoint_periodically() {
   whl::mutex_guard _(&wal_mutex);
   while (true) {
     // Wait for some number of transactions to happen
-    while (transactions_since_last_checkpoint < 50) {
-      transaction_ended.wait(wal_mutex);
+    while (transactions_since_last_checkpoint < 50 && !shutting_down) {
+      checkpoint_cv.wait(wal_mutex);
     }
+    if (shutting_down)
+      return;
     checkpoint_internal();
+    transactions_since_last_checkpoint = 0;
   }
 }
 
@@ -428,12 +442,18 @@ void WAL::checkpoint() {
   checkpoint_internal();
 }
 
+WAL::Transaction WAL::begin_transaction() {
+  uint32_t txn_id = begin();
+  return Transaction(this, txn_id);
+}
+
 // PageHandle
 
-WAL::PageHandle::PageHandle(WAL *wal_layer, uint64_t txn_id, uint64_t page,
+WAL::PageHandle::PageHandle(WAL *wal_layer, uint32_t txn_id, uint64_t page,
                             bool advise_eviction)
-    : wal_layer(wal_layer), txn_id(txn_id), page(page),
-      page_handle(wal_layer->pool->get_page(page, advise_eviction)) {}
+    : wal_layer(wal_layer),
+      page_handle(wal_layer->pool->get_page(page, advise_eviction)),
+      txn_id(txn_id), page(page) {}
 
 const char *WAL::PageHandle::ro_data() { return page_handle.data(); }
 
@@ -443,29 +463,29 @@ void WAL::PageHandle::write(int offset, const void *buffer, size_t length) {
 
 void WAL::PageHandle::write(int offset, const void *buffer, size_t buf_length,
                             size_t written_length) {
-  wal_layer->set(txn_id, page * PAGE_SIZE + offset, buf_length, written_length,
-                 static_cast<const char *>(buffer));
+  wal_layer->set(txn_id, (page * PAGE_SIZE) + offset, buf_length,
+                 written_length, static_cast<const char *>(buffer));
 }
 
 // Transaction
 
-WAL::Transaction::Transaction(WAL *wal_layer, uint64_t txn_id)
-    : wal_layer(wal_layer), txn_id(txn_id), state(UNCOMMITTED) {}
+WAL::Transaction::Transaction(WAL *wal_layer, uint32_t txn_id)
+    : wal_layer(wal_layer), txn_id(txn_id), state(State::UNCOMMITTED) {}
 
 WAL::Transaction::~Transaction() {
-  if (state == UNCOMMITTED) {
+  if (state == State::UNCOMMITTED) {
     wal_layer->abort(txn_id);
   }
 }
 
 void WAL::Transaction::commit() {
   wal_layer->commit(txn_id);
-  state = COMMITTED;
+  state = State::COMMITTED;
 }
 
 void WAL::Transaction::abort() {
   wal_layer->abort(txn_id);
-  state = ABORTED;
+  state = State::ABORTED;
 }
 
 WAL::PageHandle WAL::Transaction::get_page(uint64_t page,
