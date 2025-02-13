@@ -1,5 +1,4 @@
 #include "wal.h"
-#include "bufferpool.h"
 #include "diskmap.h"
 #include "page_types.h"
 #include <cstdint>
