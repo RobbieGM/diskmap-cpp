@@ -11,8 +11,10 @@ void concurrentInsert(diskmap::DiskMap& db, int thread_id) {
     int end = start + (NUM_ENTRIES / NUM_THREADS);
 
     for (int i = start; i < end; i++) {
-        whl::string key = whl::string("thread_key") + whl::string(std::to_string(i));
-        whl::string value = whl::string("thread_value") + whl::string(std::to_string(i));
+        std::string temp = "thread_key" + std::to_string(i);
+        whl::string key(temp.c_str());
+        std::string temp2 = "thread_value" + std::to_string(i);
+        whl::string value(temp2.c_str());
         db.write(key, value.c_str(), value.size());
     }
 }
@@ -23,7 +25,8 @@ void concurrentRead(diskmap::DiskMap& db, int thread_id) {
     bool found;
 
     for (int i = start; i < end; i++) {
-        whl::string key = whl::string("thread_key") + whl::string(std::to_string(i));
+        std::string temp = "thread_key" + std::to_string(i);
+        whl::string key(temp.c_str());
         auto result = db.read(key, found);
         assert(found);
     }

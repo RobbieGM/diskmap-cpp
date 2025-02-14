@@ -16,7 +16,8 @@ void allocFreeTest()
     {
         std::string temp = "alloc_key" + std::to_string(i);
         whl::string key(temp.c_str());
-        whl::string value = whl::string("alloc_value");
+        std::string temp2 = "alloc_value" + std::to_string(i);
+        whl::string value(temp2.c_str());
         // value.append(std::to_string(i).c_str());
         db.write(key, value.c_str(), value.size());
         keys.push_back(key);
@@ -47,9 +48,10 @@ void allocFreeTest()
     std::vector<whl::string> new_keys;
     for (int i = 0; i < NUM_ALLOCS / 2; i++)
     {
-        whl::string key = whl::string("realloc_key");
-
-        whl::string value = whl::string("realloc_value");
+        std::string temp = "realloc_key" + std::to_string(i);
+        whl::string key(temp.c_str());
+        std::string temp2 = "realloc_value" + std::to_string(i);
+        whl::string value(temp2.c_str());
 
         db.write(key, value.c_str(), value.size());
         new_keys.push_back(key);
