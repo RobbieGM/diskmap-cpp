@@ -4,26 +4,26 @@
 #include <vector>
 #include <cassert>
 
-// Fix: Include whl::string explicitly
-#include "wheel.h"  
+
 
 void bulkInsertionTest() {
     diskmap::DiskMap db("diskmap_stress.db");
 
     constexpr int NUM_ENTRIES = 1000000;
     for (int i = 0; i < NUM_ENTRIES; i++) {
-        whl::string key = whl::string("key") + std::to_string(i);
-        whl::string value = whl::string("value") + std::to_string(i);
+        std::string temp = "alloc_key" + std::to_string(i);
+        whl::string key(temp.c_str());
+        whl::string value = whl::string("value") + whl::string(std::to_string(i));
         db.write(key, value.c_str(), value.size());
     }
 
     // Verify some values
     bool found;
     for (int i = 0; i < 1000; i++) {
-        whl::string key = whl::string("key") + std::to_string(i);
+        whl::string key = whl::string("key") + whl::string(std::to_string(i));
         auto result = db.read(key, found);
         assert(found);
-        assert(whl::string(result.data_ptr(), result.size()) == (whl::string("value") + std::to_string(i)));
+        assert(whl::string(result.data_ptr(), result.size()) == (whl::string("value") + whl::string(std::to_string(i))));
     }
 
     std::cout << "Bulk Insertion Test Passed" << std::endl;
@@ -36,15 +36,15 @@ void highVolumeReadWriteTest() {
     
     // Insert many entries
     for (int i = 0; i < NUM_ENTRIES; i++) {
-        whl::string key = whl::string("entry_") + std::to_string(i);
-        whl::string value = whl::string("val_") + std::to_string(i);
+        whl::string key = whl::string("entry_") + whl::string(std::to_string(i));
+        whl::string value = whl::string("val_") + whl::string(std::to_string(i));
         db.write(key, value.c_str(), value.size());
     }
 
     // Random Reads
     for (int i = 0; i < 100000; i++) {
         int randIndex = rand() % NUM_ENTRIES;
-        whl::string key = whl::string("entry_") + std::to_string(randIndex);
+        whl::string key = whl::string("entry_") + whl::string(std::to_string(randIndex));
         bool found;
         auto result = db.read(key, found);
         assert(found);
@@ -60,14 +60,14 @@ void massiveDeletionTest() {
     
     // Insert values
     for (int i = 0; i < NUM_ENTRIES; i++) {
-        whl::string key = whl::string("delete_key") + std::to_string(i);
-        whl::string value = whl::string("delete_value") + std::to_string(i);
+        whl::string key = whl::string("delete_key") + whl::string(std::to_string(i));
+        whl::string value = whl::string("delete_value") + whl::string(std::to_string(i));
         db.write(key, value.c_str(), value.size());
     }
 
     // Delete half of the keys
     for (int i = 0; i < NUM_ENTRIES / 2; i++) {
-        whl::string key = whl::string("delete_key") + std::to_string(i);
+        whl::string key = whl::string("delete_key") + whl::string(std::to_string(i));
         bool success = db.remove(key);
         assert(success);
     }
@@ -75,7 +75,7 @@ void massiveDeletionTest() {
     // Verify deletion
     bool found;
     for (int i = 0; i < NUM_ENTRIES / 2; i++) {
-        whl::string key = whl::string("delete_key") + std::to_string(i);
+        whl::string key = whl::string("delete_key") + whl::string(std::to_string(i));
         auto result = db.read(key, found);
         assert(!found); // Should be deleted
     }
