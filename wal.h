@@ -110,7 +110,7 @@ public:
   WAL(const WAL &) = delete;
   WAL &operator=(const WAL &) = delete;
 
-  class PageHandle {
+  template <typename T> class PageHandle {
     WAL *wal_layer;
     BufferPool::PageHandle page_handle;
     uint32_t txn_id;
@@ -121,12 +121,19 @@ public:
     friend class Transaction;
 
   public:
-    const char *ro_data();
+    const T *ro_data();
     // Writes length bytes into the page starting at offset
     void write(int offset, const void *buffer, size_t length);
     // Writes buf_length bytes, zeroing the remaining bytes until written_length
     void write(int offset, const void *buffer, size_t buf_length,
                size_t written_length);
+    // Write field
+    template <typename U> void write(U T::*field, U value);
+    // Write into fixed size array
+    template <typename U, size_t N>
+    void write(U (T::*field)[N], size_t index, U value);
+    // Write into pointer
+    template <typename U> void write(U (T::*field)[], size_t index, U value);
   };
 
   class Transaction {
@@ -139,14 +146,15 @@ public:
     Transaction &operator=(const Transaction &) = delete;
     Transaction &operator=(Transaction &&) = delete;
     friend class WAL;
-    friend class PageHandle;
+    template <typename U> friend class PageHandle;
 
   public:
     ~Transaction();
     void commit();
     void abort();
 
-    PageHandle get_page(uint64_t page, bool advise_eviction = false);
+    template <typename T>
+    PageHandle<T> get_page(uint64_t page, bool advise_eviction = false);
   };
 
   Transaction begin_transaction();
@@ -155,4 +163,5 @@ public:
   // Only to be used internally
   void checkpoint_periodically();
 };
+
 } // namespace diskmap
