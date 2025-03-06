@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <wheel.h>
+#include <whl_unique_ptr.h>
 
 namespace diskmap {
 
@@ -22,6 +23,7 @@ class DiskMap {
   SpaceManager space_manager;
   whl::unique_ptr<BufferPool> buffer_pool;
   whl::unique_ptr<WAL> wal_layer;
+  whl::rw_mutex global_lock;
   // LockManager lock_manager;
 
   // Helper method to find the bucket for a given key in an internal node.
@@ -56,55 +58,63 @@ class DiskMap {
 
   // Helper method to create a subtree of nodes starting within an internal
   // node. May only create a leaf node, or may create multiple internal nodes.
-  void create_subtree(WAL::Transaction &t,
+  void create_subtree(WAL::RWTransaction &t,
                       WAL::PageHandle<InternalNodePage> &parent,
                       int parent_entry, int parent_depth,
                       const whl::vector<KVEntry> &entries);
 
-  whl::vector<char> read(WAL::Transaction &t, whl::string &key, bool &found);
+  whl::vector<char> read(WAL::ROTransaction &t, whl::string &key, bool &found);
   // whl::vector<char> read_part(WAL::Transaction &t, whl::string &key,
   //                             size_t offset, size_t length,
   //                             bool &found); // TODO
-  void write(WAL::Transaction &t, whl::string &key, const void *buffer,
+  void write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
              size_t length);
   // void append(WAL::Transaction &t, whl::string &key, void *buffer,
   //             size_t length); // TODO
-  bool remove(WAL::Transaction &t, whl::string &key);
+  bool remove(WAL::RWTransaction &t, whl::string &key);
 
-  void debug_dump(WAL::Transaction &t);
-  void debug_dump_recursive(WAL::Transaction &t, int64_t page, int indent_level,
-                            int parent_index);
+  void debug_dump(WAL::ROTransaction &t);
+  void debug_dump_recursive(WAL::ROTransaction &t, int64_t page,
+                            int indent_level, int parent_index);
 
   friend class Transaction;
 
 public:
   // Initialize a DiskMap, loading from the given path or creating a new file
-  // to back the map at that path
   explicit DiskMap(whl::string path);
 
-  class Transaction {
+  class ROTransaction {
+  protected:
     DiskMap *dm;
-    WAL::Transaction tx;
-
-    friend class DiskMap;
+    whl::unique_ptr<WAL::ROTransaction> tx;
 
   public:
-    explicit Transaction(DiskMap *dm);
-
-    void commit();
-    void abort();
+    explicit ROTransaction(DiskMap *dm);
+    explicit ROTransaction(DiskMap *dm, whl::unique_ptr<WAL::ROTransaction> tx);
 
     whl::vector<char> read(whl::string key, bool &found);
     // whl::vector<char> read_part(whl::string key, size_t offset, size_t
     // length,
     //                             bool &found);
-    void write(whl::string key, const void *buffer, size_t length);
-    // void append(whl::string key, void *buffer, size_t length);
-    bool remove(whl::string key);
     void debug_dump();
   };
 
-  Transaction begin_transaction();
+  class RWTransaction : public ROTransaction {
+    friend class DiskMap;
+
+  public:
+    explicit RWTransaction(DiskMap *dm);
+
+    void commit();
+    void abort();
+
+    void write(whl::string key, const void *buffer, size_t length);
+    // void append(whl::string key, void *buffer, size_t length);
+    bool remove(whl::string key);
+  };
+
+  RWTransaction begin_rw_transaction();
+  ROTransaction begin_ro_transaction();
 };
 
 }; // namespace diskmap

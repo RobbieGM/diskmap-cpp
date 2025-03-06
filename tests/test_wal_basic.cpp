@@ -14,7 +14,7 @@ int main() {
   diskmap::BufferPool pool(fd, 2);
   diskmap::WAL wal(&pool, "test.dm.wal");
   {
-    auto tx = wal.begin_transaction();
+    auto tx = wal.begin_rw_transaction();
     auto p0 = tx.get_page<TestPage>(0);
     p0.write(&TestPage::byte, 'a');
     assert(pool.get_page(0).data()[0] == 'a');
@@ -22,7 +22,7 @@ int main() {
     assert(pool.get_page(0).data()[0] == '\0');
   }
   {
-    auto tx = wal.begin_transaction();
+    auto tx = wal.begin_rw_transaction();
     auto p0 = tx.get_page<TestPage>(0);
     p0.write(&TestPage::byte, 'b');
     assert(pool.get_page(0).data()[0] == 'b');
@@ -30,7 +30,7 @@ int main() {
     assert(pool.get_page(0).data()[0] == 'b');
   }
   {
-    auto unfinished_tx = wal.begin_transaction();
+    auto unfinished_tx = wal.begin_rw_transaction();
     auto p0 = unfinished_tx.get_page<TestPage>(0);
     p0.write(&TestPage::byte, 'c');
     // Implicit abort

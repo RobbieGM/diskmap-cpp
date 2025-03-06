@@ -6,7 +6,7 @@ int main() {
   remove("test.dm");
   remove("test.dm.wal");
   diskmap::DiskMap map("test.dm");
-  auto tx = map.begin_transaction();
+  auto tx = map.begin_rw_transaction();
   const char short_value[8]{};
 
   tx.write("111", static_cast<const void *>(short_value), sizeof(short_value));

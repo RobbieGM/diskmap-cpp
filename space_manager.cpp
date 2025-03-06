@@ -7,7 +7,7 @@ namespace diskmap {
 
 SpaceManager::SpaceManager() {}
 
-void SpaceManager::init(WAL::Transaction &t) {
+void SpaceManager::init(WAL::RWTransaction &t) {
   WAL::PageHandle<MetaPage> meta = t.get_page<MetaPage>(0);
   meta.write(&MetaPage::next_free_page, static_cast<int64_t>(MAX_ORDER + 3));
   meta.write(&MetaPage::last_fpl_page, 0, static_cast<int64_t>(1));
@@ -16,7 +16,7 @@ void SpaceManager::init(WAL::Transaction &t) {
   meta.write(&MetaPage::last_fpl_page_entries, 1, 0);
 }
 
-int64_t SpaceManager::allocate(WAL::Transaction &t, order_t order) {
+int64_t SpaceManager::allocate(WAL::RWTransaction &t, order_t order) {
   WAL::PageHandle<MetaPage> meta = t.get_page<MetaPage>(0);
   if (meta.ro_data()->last_fpl_page_entries[order] == 0) {
     // No freed regions are available to reuse
@@ -56,7 +56,7 @@ int64_t SpaceManager::allocate(WAL::Transaction &t, order_t order) {
   return result;
 }
 
-void SpaceManager::free(WAL::Transaction &t, int64_t page, order_t order) {
+void SpaceManager::free(WAL::RWTransaction &t, int64_t page, order_t order) {
   if (page <= 1) {
     throw DiskMapException("free: cannot free reserved pages");
   }

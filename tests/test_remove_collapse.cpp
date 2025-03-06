@@ -7,7 +7,7 @@ int main() {
   remove("test.dm");
   remove("test.dm.wal");
   diskmap::DiskMap map("test.dm");
-  auto tx = map.begin_transaction();
+  auto tx = map.begin_rw_transaction();
   const char long_value[3000]{};
 
   whl::string k0 = "a";

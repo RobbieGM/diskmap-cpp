@@ -8,10 +8,6 @@
 
 namespace diskmap {
 
-// whl::mutex_guard LockManager::get_guard(int64_t page) {
-//   return whl::mutex_guard(&locks[page]);
-// }
-
 const char *DiskMap::MAGIC = "DISKMAP";
 
 DiskMap::DiskMap(whl::string path) {
@@ -27,7 +23,7 @@ DiskMap::DiskMap(whl::string path) {
   wal_layer = new WAL(buffer_pool.get(), path + ".wal");
 
   if (was_created) {
-    WAL::Transaction tx = wal_layer->begin_transaction();
+    WAL::RWTransaction tx = wal_layer->begin_rw_transaction();
     // Initialize page 0 (metadata)
     WAL::PageHandle<MetaPage> meta = tx.get_page<MetaPage>(0);
     meta.write(&MetaPage::kv_entry_count, static_cast<int64_t>(0));
@@ -49,10 +45,9 @@ DiskMap::DiskMap(whl::string path) {
     tx.commit();
   } else {
     // Check for magic string
-    // TODO: create read-only transactions that don't write a BEGIN record
-    BufferPool::PageHandle meta = buffer_pool->get_page(0);
-    if (memcmp(meta.data() + offsetof(MetaPage, magic), DiskMap::MAGIC, 8) !=
-        0) {
+    WAL::ROTransaction tx = wal_layer->begin_ro_transaction();
+    WAL::ROPageHandle<MetaPage> meta = tx.get_page<MetaPage>(0);
+    if (memcmp(meta.ro_data()->magic, MAGIC, 8) != 0) {
       throw DiskMapException("Invalid diskmap file");
     }
   }
@@ -143,7 +138,7 @@ DiskMap::get_entries_in_leaf(const LeafNodeStartPage *leaf) {
   return result;
 }
 
-void DiskMap::create_subtree(WAL::Transaction &t,
+void DiskMap::create_subtree(WAL::RWTransaction &t,
                              WAL::PageHandle<InternalNodePage> &parent,
                              int parent_entry, int parent_depth,
                              const whl::vector<KVEntry> &entries) {
@@ -283,7 +278,7 @@ void DiskMap::update_value_trivially(WAL::PageHandle<LeafNodeStartPage> &leaf,
              update_buffer);
 }
 
-void DiskMap::write(WAL::Transaction &t, whl::string &key, const void *buffer,
+void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
                     size_t length) {
   if (key.size() == 0 || buffer == nullptr) {
     throw DiskMapException("write: invalid input parameters");
@@ -429,7 +424,7 @@ void DiskMap::write(WAL::Transaction &t, whl::string &key, const void *buffer,
   }
 }
 
-whl::vector<char> DiskMap::read(WAL::Transaction &t, whl::string &key,
+whl::vector<char> DiskMap::read(WAL::ROTransaction &t, whl::string &key,
                                 bool &found) {
   // TODO: multi-page values
   // ROOT_PAGE marked as internal with MSB set
@@ -440,7 +435,7 @@ whl::vector<char> DiskMap::read(WAL::Transaction &t, whl::string &key,
     // Check if we've reached a leaf node by checking MSB
     if (!get_msb(page)) {
       // LeafNodeStartPage *leaf = leaf_node(page);
-      WAL::PageHandle<LeafNodeStartPage> leaf =
+      WAL::ROPageHandle<LeafNodeStartPage> leaf =
           t.get_page<LeafNodeStartPage>(page);
       int entry_offset = find_entry_in_leaf(leaf.ro_data(), key);
       int offset = entry_offset;
@@ -467,7 +462,8 @@ whl::vector<char> DiskMap::read(WAL::Transaction &t, whl::string &key,
 
     // We're in an internal node
     page = clear_msb(page);
-    WAL::PageHandle<InternalNodePage> node = t.get_page<InternalNodePage>(page);
+    WAL::ROPageHandle<InternalNodePage> node =
+        t.get_page<InternalNodePage>(page);
     int64_t bucket = get_bucket(key, depth + 1);
 
     if (node.ro_data()->entries[bucket] == 0) {
@@ -480,7 +476,7 @@ whl::vector<char> DiskMap::read(WAL::Transaction &t, whl::string &key,
   }
 }
 
-bool DiskMap::remove(WAL::Transaction &t, whl::string &key) {
+bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
   // TODO: multi-page values
   // ROOT_PAGE marked as internal with MSB set
   WAL::PageHandle<InternalNodePage> parent =
@@ -581,15 +577,15 @@ bool DiskMap::remove(WAL::Transaction &t, whl::string &key) {
   return true;
 }
 
-void DiskMap::debug_dump(WAL::Transaction &t) {
-  WAL::PageHandle<MetaPage> meta = t.get_page<MetaPage>(0);
+void DiskMap::debug_dump(WAL::ROTransaction &t) {
+  WAL::ROPageHandle<MetaPage> meta = t.get_page<MetaPage>(0);
   printf("Page 0 (metadata):\n");
   printf("  kv_entry_count: %ld\n", meta.ro_data()->kv_entry_count);
   printf("  next_free_page: %ld\n", meta.ro_data()->next_free_page);
   debug_dump_recursive(t, set_msb(ROOT_PAGE, 1), 0, -1);
 }
 
-void DiskMap::debug_dump_recursive(WAL::Transaction &t, int64_t page,
+void DiskMap::debug_dump_recursive(WAL::ROTransaction &t, int64_t page,
                                    int indent_level, int parent_index) {
   // Print indentation
   for (int i = 0; i < indent_level; i++) {
@@ -603,7 +599,7 @@ void DiskMap::debug_dump_recursive(WAL::Transaction &t, int64_t page,
            parent_index);
 
     // Recursively process all non-empty entries
-    WAL::PageHandle<InternalNodePage> node =
+    WAL::ROPageHandle<InternalNodePage> node =
         t.get_page<InternalNodePage>(actual_page);
     for (int i = 0; i < InternalNodePage::BRANCHING_FACTOR; i++) {
       if (node.ro_data()->entries[i] != 0) {
@@ -613,7 +609,7 @@ void DiskMap::debug_dump_recursive(WAL::Transaction &t, int64_t page,
     }
   } else {
     // Leaf node
-    WAL::PageHandle<LeafNodeStartPage> leaf =
+    WAL::ROPageHandle<LeafNodeStartPage> leaf =
         t.get_page<LeafNodeStartPage>(page);
     printf("Page 0x%lx (leaf, parent_index=%d, entry_count=%d, order=%d, "
            "usage=%zu)\n",
@@ -654,19 +650,49 @@ void DiskMap::debug_dump_recursive(WAL::Transaction &t, int64_t page,
   }
 }
 
-DiskMap::Transaction DiskMap::begin_transaction() { return Transaction(this); }
+DiskMap::RWTransaction DiskMap::begin_rw_transaction() {
+  return RWTransaction(this);
+}
+
+DiskMap::ROTransaction DiskMap::begin_ro_transaction() {
+  return ROTransaction(this);
+}
+
+// DiskMap::ROTransaction
+
+DiskMap::ROTransaction::ROTransaction(DiskMap *dm,
+                                      whl::unique_ptr<WAL::ROTransaction> tx)
+    : dm(dm), tx(whl::move(tx)) {}
+
+DiskMap::ROTransaction::ROTransaction(DiskMap *dm)
+    : ROTransaction(dm, whl::unique_ptr<WAL::ROTransaction>(
+                            whl::move(dm->wal_layer->begin_ro_transaction()))) {
+}
+
+static whl::unique_ptr<WAL::ROTransaction>
+ro_cast(whl::unique_ptr<WAL::RWTransaction> tx) {
+  return whl::unique_ptr<WAL::ROTransaction>(tx.release());
+}
+
+whl::vector<char> DiskMap::ROTransaction::read(whl::string key, bool &found) {
+  return dm->read(*tx, key, found);
+}
+
+void DiskMap::ROTransaction::debug_dump() { dm->debug_dump(*tx); }
 
 // DiskMap::Transaction
 
-DiskMap::Transaction::Transaction(DiskMap *dm)
-    : dm(dm), tx(dm->wal_layer->begin_transaction()) {}
+DiskMap::RWTransaction::RWTransaction(DiskMap *dm)
+    : ROTransaction(dm,
+                    ro_cast(whl::move(dm->wal_layer->begin_rw_transaction()))) {
+}
 
-void DiskMap::Transaction::commit() { tx.commit(); }
+void DiskMap::RWTransaction::commit() {
+  dynamic_cast<WAL::RWTransaction *>(tx.get())->commit();
+}
 
-void DiskMap::Transaction::abort() { tx.abort(); }
-
-whl::vector<char> DiskMap::Transaction::read(whl::string key, bool &found) {
-  return dm->read(tx, key, found);
+void DiskMap::RWTransaction::abort() {
+  dynamic_cast<WAL::RWTransaction *>(tx.get())->abort();
 }
 
 // whl::vector<char> DiskMap::Transaction::read_part(whl::string key,
@@ -675,9 +701,9 @@ whl::vector<char> DiskMap::Transaction::read(whl::string key, bool &found) {
 //   return dm->read_part(tx, key, offset, length, found);
 // }
 
-void DiskMap::Transaction::write(whl::string key, const void *buffer,
-                                 size_t length) {
-  dm->write(tx, key, buffer, length);
+void DiskMap::RWTransaction::write(whl::string key, const void *buffer,
+                                   size_t length) {
+  dm->write(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key, buffer, length);
 }
 
 // void DiskMap::Transaction::append(whl::string key, void *buffer,
@@ -685,10 +711,8 @@ void DiskMap::Transaction::write(whl::string key, const void *buffer,
 //   dm->append(tx, key, buffer, length);
 // }
 
-bool DiskMap::Transaction::remove(whl::string key) {
-  return dm->remove(tx, key);
+bool DiskMap::RWTransaction::remove(whl::string key) {
+  return dm->remove(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key);
 }
-
-void DiskMap::Transaction::debug_dump() { dm->debug_dump(tx); }
 
 }; // namespace diskmap

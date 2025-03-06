@@ -16,7 +16,7 @@ int main() {
     remove("test.dm");
     remove("test.dm.wal");
     diskmap::DiskMap map("test.dm");
-    auto tx = map.begin_transaction();
+    auto tx = map.begin_rw_transaction();
     tx.write(k3, b4000, 4000);
     tx.write(k0, b500, 500); // Split at root->342
     tx.write(k1, b500, 500); // Split at root->342->413
@@ -31,7 +31,7 @@ int main() {
     remove("test.dm");
     remove("test.dm.wal");
     diskmap::DiskMap map("test.dm");
-    auto tx = map.begin_transaction();
+    auto tx = map.begin_rw_transaction();
     tx.write(k0, b500, 500);
     tx.write(k1, b500, 500);
     tx.write(k2, b500, 500);

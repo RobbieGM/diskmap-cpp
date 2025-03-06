@@ -11,7 +11,7 @@ int main() {
   const char long_value[] = "long value";
   // a, ad, hK hash to [446, ...]
   // b hashes to something else
-  auto tx = map.begin_transaction();
+  auto tx = map.begin_rw_transaction();
   tx.write("a", static_cast<const void *>(long_value), sizeof(long_value));
   tx.write("ad", static_cast<const void *>(long_value), sizeof(long_value));
   tx.write("b", static_cast<const void *>(long_value), sizeof(long_value));

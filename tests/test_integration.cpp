@@ -10,7 +10,7 @@ int main() {
     const char short_value[] = "short";
     // a, ad, hK hash to [446, ...]
     // b hashes to something else
-    auto tx1 = map.begin_transaction();
+    auto tx1 = map.begin_rw_transaction();
     tx1.write("a", static_cast<const void *>(short_value), sizeof(short_value));
     tx1.write("ad", static_cast<const void *>(short_value),
               sizeof(short_value));
@@ -24,19 +24,19 @@ int main() {
     assert(found);
     tx1.commit();
 
-    auto tx2 = map.begin_transaction();
+    auto tx2 = map.begin_rw_transaction();
     tx2.write("explicit abort", static_cast<const void *>(short_value),
               sizeof(short_value));
     tx2.abort();
 
-    auto tx3 = map.begin_transaction();
+    auto tx3 = map.begin_rw_transaction();
     tx3.write("implicit abort", static_cast<const void *>(short_value),
               sizeof(short_value));
   }
 
   {
     diskmap::DiskMap map("test.dm");
-    auto tx = map.begin_transaction();
+    auto tx = map.begin_ro_transaction();
     bool found;
     tx.read("a", found);
     assert(found);

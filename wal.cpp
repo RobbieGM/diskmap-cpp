@@ -439,28 +439,43 @@ void WAL::checkpoint() {
   checkpoint_internal();
 }
 
-WAL::Transaction WAL::begin_transaction() {
+WAL::ROTransaction WAL::begin_ro_transaction() { return ROTransaction(this); }
+WAL::RWTransaction WAL::begin_rw_transaction() {
   uint32_t txn_id = begin();
-  return Transaction(this, txn_id);
+  return RWTransaction(this, txn_id);
 }
 
 // Transaction
 
-WAL::Transaction::Transaction(WAL *wal_layer, uint32_t txn_id)
-    : wal_layer(wal_layer), txn_id(txn_id), state(State::UNCOMMITTED) {}
+WAL::ROTransaction::ROTransaction(WAL *wal_layer) : wal_layer(wal_layer) {}
 
-WAL::Transaction::~Transaction() {
-  if (state == State::UNCOMMITTED) {
+WAL::ROTransaction::ROTransaction(ROTransaction &&other) noexcept
+    : wal_layer(other.wal_layer) {
+  other.wal_layer = nullptr;
+}
+
+WAL::ROTransaction &
+WAL::ROTransaction::operator=(ROTransaction &&other) noexcept {
+  wal_layer = other.wal_layer;
+  other.wal_layer = nullptr;
+  return *this;
+}
+
+WAL::RWTransaction::RWTransaction(WAL *wal_layer, uint32_t txn_id)
+    : ROTransaction(wal_layer), txn_id(txn_id), state(State::UNCOMMITTED) {}
+
+WAL::RWTransaction::~RWTransaction() {
+  if (state == State::UNCOMMITTED && wal_layer != nullptr) {
     wal_layer->abort(txn_id);
   }
 }
 
-void WAL::Transaction::commit() {
+void WAL::RWTransaction::commit() {
   wal_layer->commit(txn_id);
   state = State::COMMITTED;
 }
 
-void WAL::Transaction::abort() {
+void WAL::RWTransaction::abort() {
   wal_layer->abort(txn_id);
   state = State::ABORTED;
 }
