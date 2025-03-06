@@ -2,7 +2,7 @@
 
 #include "buffer_pool.h"
 #include "checksum.h"
-#include "diskmap.h"
+#include "exception.h"
 
 namespace diskmap {
 
@@ -116,24 +116,61 @@ public:
     uint32_t txn_id;
     uint64_t page;
     PageHandle(WAL *wal_layer, uint32_t txn_id, uint64_t page,
-               bool advise_eviction);
+               bool advise_eviction)
+        : wal_layer(wal_layer),
+          page_handle(wal_layer->pool->get_page(page, advise_eviction)),
+          txn_id(txn_id), page(page) {}
     friend class WAL;
     friend class Transaction;
 
   public:
-    const T *ro_data();
+    int64_t get_page() const { return page; }
+    const T *ro_data() {
+      return reinterpret_cast<const T *>(page_handle.data());
+    }
+    // const char *ro_data_bin();
+    // Clears the whole page
+    void clear() { write(0, nullptr, 0, PAGE_SIZE); }
     // Writes length bytes into the page starting at offset
-    void write(int offset, const void *buffer, size_t length);
+    void write(int offset, const void *buffer, size_t length) {
+      write(offset, buffer, length, length);
+    }
     // Writes buf_length bytes, zeroing the remaining bytes until written_length
     void write(int offset, const void *buffer, size_t buf_length,
-               size_t written_length);
+               size_t written_length) {
+      wal_layer->set(txn_id, (page * PAGE_SIZE) + offset, buf_length,
+                     written_length, static_cast<const char *>(buffer));
+    }
     // Write field
-    template <typename U> void write(U T::*field, U value);
+    template <typename U> void write(U T::*field, U value) {
+      auto offset =
+          reinterpret_cast<size_t>(&(reinterpret_cast<T *>(0)->*field));
+      wal_layer->set(txn_id, (page * PAGE_SIZE) + offset, sizeof(U), sizeof(U),
+                     reinterpret_cast<const char *>(&value));
+    }
     // Write into fixed size array
     template <typename U, size_t N>
-    void write(U (T::*field)[N], size_t index, U value);
+    void write(U (T::*field)[N], size_t index, U value) {
+      auto offset =
+          reinterpret_cast<size_t>(&(reinterpret_cast<T *>(0)->*field)[index]);
+      wal_layer->set(txn_id, (page * PAGE_SIZE) + offset, sizeof(U), sizeof(U),
+                     reinterpret_cast<const char *>(&value));
+    }
     // Write into pointer
-    template <typename U> void write(U (T::*field)[], size_t index, U value);
+    template <typename U> void write(U (T::*field)[], size_t index, U value) {
+      auto offset =
+          reinterpret_cast<size_t>(&(reinterpret_cast<T *>(0)->*field)[index]);
+      wal_layer->set(txn_id, (page * PAGE_SIZE) + offset, sizeof(U), sizeof(U),
+                     reinterpret_cast<const char *>(&value));
+    }
+    // Write into pointer (multiple)
+    template <typename U>
+    void write(U (T::*field)[], size_t index, size_t count, const U *value) {
+      auto offset =
+          reinterpret_cast<size_t>(&(reinterpret_cast<T *>(0)->*field)[index]);
+      wal_layer->set(txn_id, (page * PAGE_SIZE) + offset, sizeof(U) * count,
+                     sizeof(U) * count, reinterpret_cast<const char *>(value));
+    }
   };
 
   class Transaction {
@@ -154,7 +191,12 @@ public:
     void abort();
 
     template <typename T>
-    PageHandle<T> get_page(uint64_t page, bool advise_eviction = false);
+    PageHandle<T> get_page(uint64_t page, bool advise_eviction = false) {
+      if (state != State::UNCOMMITTED) {
+        throw DiskMapException("get_page: transaction is already finished");
+      }
+      return PageHandle<T>(wal_layer, txn_id, page, advise_eviction);
+    }
   };
 
   Transaction begin_transaction();

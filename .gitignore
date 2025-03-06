@@ -1,6 +1,7 @@
 *.o
 *.so
 *.dm
+*.wal
 test_*
 test
 !test_*.out.correct

@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -g -lwheel -std=c++17 -fPIC -Wall -Wextra -O2 -DDISABLE_ASYNC
+CXXFLAGS = -g -lwheel -std=c++17 -fPIC -Wall -Wextra -O0 -DDISABLE_ASYNC -fsanitize=address
 LDFLAGS = -shared
 
 # Source files

@@ -4,28 +4,30 @@
 
 int main() {
   remove("test.dm");
+  remove("test.dm.wal");
   diskmap::DiskMap map("test.dm");
+  auto tx = map.begin_transaction();
   const char short_value[8]{};
 
-  map.write("111", static_cast<const void *>(short_value), sizeof(short_value));
-  map.write("dz", static_cast<const void *>(short_value), sizeof(short_value));
-  map.write("uJi", static_cast<const void *>(short_value), sizeof(short_value));
-  map.write("444", static_cast<const void *>(short_value), sizeof(short_value));
+  tx.write("111", static_cast<const void *>(short_value), sizeof(short_value));
+  tx.write("a", static_cast<const void *>(short_value), sizeof(short_value));
+  tx.write("aj", static_cast<const void *>(short_value), sizeof(short_value));
+  tx.write("444", static_cast<const void *>(short_value), sizeof(short_value));
 
-  assert(map.remove("dz"));
-  assert(map.remove("444"));
-  assert(!map.remove("dz"));
+  assert(tx.remove("a"));
+  assert(tx.remove("444"));
+  assert(!tx.remove("a"));
 
-  bool found;
-  map.read("111", found);
+  bool found = false;
+  tx.read("111", found);
   assert(found);
-  map.read("dz", found);
+  tx.read("a", found);
   assert(!found);
-  map.read("uJi", found);
+  tx.read("aj", found);
   assert(found);
-  map.read("444", found);
+  tx.read("444", found);
   assert(!found);
 
-  map.debug_dump();
+  tx.debug_dump();
   return 0;
 }

@@ -5,23 +5,25 @@
 
 int main() {
   remove("test.dm");
+  remove("test.dm.wal");
   diskmap::DiskMap map("test.dm");
+  auto tx = map.begin_transaction();
   const char long_value[3000]{};
 
-  // dz = [342, 386, 340]
-  // uJi = [342, 413, 272]
-  map.write("dz", static_cast<const void *>(long_value), sizeof(long_value));
-  map.write("uJi", static_cast<const void *>(long_value), sizeof(long_value));
+  whl::string k0 = "a";
+  whl::string k1 = "ad";
+  tx.write(k0, static_cast<const void *>(long_value), sizeof(long_value));
+  tx.write(k1, static_cast<const void *>(long_value), sizeof(long_value));
 
   // Should show internal node with two leaves
   printf("Before remove:\n");
-  map.debug_dump();
+  tx.debug_dump();
 
-  assert(map.remove("dz"));
+  assert(tx.remove(k0));
 
   // Should show leaf node with one entry as direct child of root
   printf("\nAfter remove:\n");
-  map.debug_dump();
+  tx.debug_dump();
 
   return 0;
 }

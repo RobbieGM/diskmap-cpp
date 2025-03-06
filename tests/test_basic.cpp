@@ -4,33 +4,36 @@
 
 int main() {
   remove("test.dm");
+  remove("test.dm.wal");
   diskmap::DiskMap map("test.dm");
   // 4 byte key, 8 byte value length
-  const char short_value[8]{};
-  const char long_value[1024 - 4 - 8]{};
-  map.write("111", static_cast<const void *>(long_value), sizeof(long_value));
-  map.write("222", static_cast<const void *>(long_value), sizeof(long_value));
-  map.write("333", static_cast<const void *>(long_value), sizeof(long_value));
-  map.write("444", static_cast<const void *>(long_value), sizeof(long_value));
+  const char short_value[] = "short";
+  const char long_value[] = "long value";
+  // a, ad, hK hash to [446, ...]
+  // b hashes to something else
+  auto tx = map.begin_transaction();
+  tx.write("a", static_cast<const void *>(long_value), sizeof(long_value));
+  tx.write("ad", static_cast<const void *>(long_value), sizeof(long_value));
+  tx.write("b", static_cast<const void *>(long_value), sizeof(long_value));
   // Rewrite all values to short value
-  map.write("111", static_cast<const void *>(short_value), sizeof(short_value));
-  map.write("222", static_cast<const void *>(short_value), sizeof(short_value));
-  map.write("333", static_cast<const void *>(short_value), sizeof(short_value));
-  map.write("444", static_cast<const void *>(short_value), sizeof(short_value));
-  // Rewrite all values to long value and add 111-
-  map.write("111-", static_cast<const void *>(long_value), sizeof(long_value));
-  map.write("222", static_cast<const void *>(long_value), sizeof(long_value));
-  map.write("333", static_cast<const void *>(long_value), sizeof(long_value));
-  map.write("444", static_cast<const void *>(long_value), sizeof(long_value));
+  tx.write("a", static_cast<const void *>(short_value), sizeof(short_value));
+  tx.write("ad", static_cast<const void *>(short_value), sizeof(short_value));
+  tx.write("b", static_cast<const void *>(short_value), sizeof(short_value));
+  // Add hK, rewrite all values to long value
+  tx.write("hK", static_cast<const void *>(long_value), sizeof(long_value));
+  tx.write("a", static_cast<const void *>(long_value), sizeof(long_value));
+  tx.write("ad", static_cast<const void *>(long_value), sizeof(long_value));
+  tx.write("b", static_cast<const void *>(long_value), sizeof(long_value));
 
   bool found;
-  map.read("222", found);
+  tx.read("a", found);
   assert(found);
-  map.read("111-", found);
+  tx.read("ad", found);
   assert(found);
-  map.read("555", found);
-  assert(!found);
+  tx.read("b", found);
+  assert(found);
 
-  map.debug_dump();
+  tx.debug_dump();
+  tx.commit();
   return 0;
 }

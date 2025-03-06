@@ -1,5 +1,4 @@
 #include "wal.h"
-#include "diskmap.h"
 #include "page_types.h"
 #include <cstdint>
 #include <cstring>
@@ -418,7 +417,6 @@ WAL::~WAL() {
   shutting_down = true;
   checkpoint_cv.broadcast();
   checkpointing_thread.join();
-  sync_log();
   close(wal_fd);
 }
 
@@ -446,57 +444,6 @@ WAL::Transaction WAL::begin_transaction() {
   return Transaction(this, txn_id);
 }
 
-// PageHandle
-
-template <typename T>
-WAL::PageHandle<T>::PageHandle(WAL *wal_layer, uint32_t txn_id, uint64_t page,
-                               bool advise_eviction)
-    : wal_layer(wal_layer),
-      page_handle(wal_layer->pool->get_page(page, advise_eviction)),
-      txn_id(txn_id), page(page) {}
-
-template <typename T> const T *WAL::PageHandle<T>::ro_data() {
-  return static_cast<T *>(page_handle.data());
-}
-
-template <typename T>
-void WAL::PageHandle<T>::write(int offset, const void *buffer, size_t length) {
-  write(offset, buffer, length, length);
-}
-
-template <typename T>
-void WAL::PageHandle<T>::write(int offset, const void *buffer,
-                               size_t buf_length, size_t written_length) {
-  wal_layer->set(txn_id, (page * PAGE_SIZE) + offset, buf_length,
-                 written_length, static_cast<const char *>(buffer));
-}
-
-template <typename T>
-template <typename U>
-void WAL::PageHandle<T>::write(U T::*field, U value) {
-  auto offset = reinterpret_cast<size_t>(&(reinterpret_cast<T *>(0)->*field));
-  wal_layer->set(txn_id, (page * PAGE_SIZE) + offset, sizeof(value),
-                 sizeof(value), reinterpret_cast<const char *>(&value));
-}
-
-template <typename T>
-template <typename U, size_t N>
-void WAL::PageHandle<T>::write(U (T::*field)[N], size_t index, U value) {
-  auto offset =
-      reinterpret_cast<size_t>(&(reinterpret_cast<T *>(0)->*field)[index]);
-  wal_layer->set(txn_id, (page * PAGE_SIZE) + offset, sizeof(value),
-                 sizeof(value), reinterpret_cast<const char *>(&value));
-}
-
-template <typename T>
-template <typename U>
-void WAL::PageHandle<T>::write(U (T::*field)[], size_t index, U value) {
-  auto offset =
-      reinterpret_cast<size_t>(&(reinterpret_cast<T *>(0)->*field)[index]);
-  wal_layer->set(txn_id, (page * PAGE_SIZE) + offset, sizeof(value),
-                 sizeof(value), reinterpret_cast<const char *>(&value));
-}
-
 // Transaction
 
 WAL::Transaction::Transaction(WAL *wal_layer, uint32_t txn_id)
@@ -516,12 +463,6 @@ void WAL::Transaction::commit() {
 void WAL::Transaction::abort() {
   wal_layer->abort(txn_id);
   state = State::ABORTED;
-}
-
-template <typename T>
-WAL::PageHandle<T> WAL::Transaction::get_page(uint64_t page,
-                                              bool advise_eviction) {
-  return PageHandle<T>(wal_layer, txn_id, page, advise_eviction);
 }
 
 } // namespace diskmap

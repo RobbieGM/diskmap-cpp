@@ -3,6 +3,10 @@
 #include <cstdio>
 #include <fcntl.h>
 
+struct TestPage {
+  char byte;
+};
+
 int main() {
   remove("test.dm");
   remove("test.dm.wal");
@@ -11,24 +15,24 @@ int main() {
   diskmap::WAL wal(&pool, "test.dm.wal");
   {
     auto tx = wal.begin_transaction();
-    auto p0 = tx.get_page(0);
-    p0.write(0, "a", 1);
+    auto p0 = tx.get_page<TestPage>(0);
+    p0.write(&TestPage::byte, 'a');
     assert(pool.get_page(0).data()[0] == 'a');
     tx.abort();
     assert(pool.get_page(0).data()[0] == '\0');
   }
   {
     auto tx = wal.begin_transaction();
-    auto p0 = tx.get_page(0);
-    p0.write(0, "b", 1);
+    auto p0 = tx.get_page<TestPage>(0);
+    p0.write(&TestPage::byte, 'b');
     assert(pool.get_page(0).data()[0] == 'b');
     tx.commit();
     assert(pool.get_page(0).data()[0] == 'b');
   }
   {
     auto unfinished_tx = wal.begin_transaction();
-    auto p0 = unfinished_tx.get_page(0);
-    p0.write(0, "c", 1);
+    auto p0 = unfinished_tx.get_page<TestPage>(0);
+    p0.write(&TestPage::byte, 'c');
     // Implicit abort
   }
   assert(pool.get_page(0).data()[0] == 'b');
