@@ -87,10 +87,12 @@ public:
   protected:
     DiskMap *dm;
     whl::unique_ptr<WAL::ROTransaction> tx;
+    whl::rw_mutex_guard guard;
 
   public:
     explicit ROTransaction(DiskMap *dm);
-    explicit ROTransaction(DiskMap *dm, whl::unique_ptr<WAL::ROTransaction> tx);
+    explicit ROTransaction(DiskMap *dm, whl::unique_ptr<WAL::ROTransaction> tx,
+                           whl::rw_mutex_guard::Mode mode);
 
     whl::vector<char> read(whl::string key, bool &found);
     // whl::vector<char> read_part(whl::string key, size_t offset, size_t

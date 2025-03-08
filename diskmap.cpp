@@ -661,13 +661,15 @@ DiskMap::ROTransaction DiskMap::begin_ro_transaction() {
 // DiskMap::ROTransaction
 
 DiskMap::ROTransaction::ROTransaction(DiskMap *dm,
-                                      whl::unique_ptr<WAL::ROTransaction> tx)
-    : dm(dm), tx(whl::move(tx)) {}
+                                      whl::unique_ptr<WAL::ROTransaction> tx,
+                                      whl::rw_mutex_guard::Mode mode)
+    : dm(dm), tx(whl::move(tx)), guard(&dm->global_lock, mode) {}
 
 DiskMap::ROTransaction::ROTransaction(DiskMap *dm)
-    : ROTransaction(dm, whl::unique_ptr<WAL::ROTransaction>(
-                            whl::move(dm->wal_layer->begin_ro_transaction()))) {
-}
+    : ROTransaction(dm,
+                    whl::unique_ptr<WAL::ROTransaction>(
+                        whl::move(dm->wal_layer->begin_ro_transaction())),
+                    whl::rw_mutex_guard::Mode::READ) {}
 
 static whl::unique_ptr<WAL::ROTransaction>
 ro_cast(whl::unique_ptr<WAL::RWTransaction> tx) {
@@ -684,8 +686,8 @@ void DiskMap::ROTransaction::debug_dump() { dm->debug_dump(*tx); }
 
 DiskMap::RWTransaction::RWTransaction(DiskMap *dm)
     : ROTransaction(dm,
-                    ro_cast(whl::move(dm->wal_layer->begin_rw_transaction()))) {
-}
+                    ro_cast(whl::move(dm->wal_layer->begin_rw_transaction())),
+                    whl::rw_mutex_guard::Mode::WRITE) {}
 
 void DiskMap::RWTransaction::commit() {
   dynamic_cast<WAL::RWTransaction *>(tx.get())->commit();
