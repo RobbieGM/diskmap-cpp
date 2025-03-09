@@ -51,7 +51,7 @@ class DiskMap {
                                      int entry_offset, const whl::string &key,
                                      const void *buffer, size_t length);
 
-  // int64_t *get_parent_entry_for(whl::string &key, int &depth);
+  void free_leaf(WAL::RWTransaction &t, int64_t page);
 
   static whl::vector<KVEntry>
   get_entries_in_leaf(const LeafNodeStartPage *leaf);
@@ -81,7 +81,7 @@ class DiskMap {
 
 public:
   // Initialize a DiskMap, loading from the given path or creating a new file
-  explicit DiskMap(whl::string path);
+  explicit DiskMap(const whl::string &path);
 
   class ROTransaction {
   protected:

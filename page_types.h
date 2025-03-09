@@ -48,8 +48,8 @@ struct LeafNodeStartPage {
   // The first page of a leaf node. Contains page header and data.
   int64_t next;
   uint64_t usage; // Tracks total bytes used in the data section of this page
+                  // and all linked regions
   uint16_t entry_count;
-  order_t order;
   /*
    * Data format in leaf node data section:
    * Repeated contiguous entries of:
@@ -66,8 +66,6 @@ struct LeafNodeStartPage {
 
 struct LeafNodeContinuationPage {
   int64_t next;
-  uint64_t usage; // Total bytes used in the data section (of this page and
-                  // subsequent LeafNodePurePages)
   char data[];
 } __attribute__((packed));
 

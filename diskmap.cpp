@@ -1,4 +1,5 @@
 #include "diskmap.h"
+#include "big_value.h"
 #include "page_types.h"
 #include <cstdio>
 #include <cstdlib>
@@ -10,7 +11,7 @@ namespace diskmap {
 
 const char *DiskMap::MAGIC = "DISKMAP";
 
-DiskMap::DiskMap(whl::string path) {
+DiskMap::DiskMap(const whl::string &path) {
   int fd = open(path.c_str(), O_RDWR | O_CREAT | O_EXCL, 0666);
   bool was_created = fd > 0;
   if (!was_created) {
@@ -183,8 +184,50 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
     // Replace parent entry with pointer to new leaf
     new_parent_entry = set_msb(new_leaf_page_number, 0);
   } else if (entries.size() == 1) {
-    // TODO: implement single entry node linked list of pages
-    throw DiskMapException("Key-value pair exceeds maximum size");
+    // Use one leaf node with linked list of continuation pages
+    int continuation_regions =
+        BigValue::required_continuation_pages(total_entries_size);
+    int64_t new_leaf_start_page_number = space_manager.allocate(t, 0);
+    WAL::PageHandle<LeafNodeStartPage> new_leaf_start =
+        t.get_page<LeafNodeStartPage>(new_leaf_start_page_number);
+    new_leaf_start.write(&LeafNodeStartPage::usage, total_entries_size);
+    new_leaf_start.write(&LeafNodeStartPage::entry_count,
+                         static_cast<uint16_t>(1));
+    // Create linked list of continuation pages
+    if (continuation_regions > 0) {
+      int order = 1;
+      int64_t new_leaf_continuation_page_number =
+          space_manager.allocate(t, order++);
+      WAL::PageHandle<LeafNodeContinuationPage> new_leaf_continuation =
+          t.get_page<LeafNodeContinuationPage>(
+              new_leaf_continuation_page_number);
+      new_leaf_start.write(&LeafNodeStartPage::next,
+                           new_leaf_continuation_page_number);
+      WAL::PageHandle<LeafNodeContinuationPage> prev =
+          whl::move(new_leaf_continuation);
+      continuation_regions--;
+      while (continuation_regions > 0) {
+        int64_t new_leaf_continuation_page_number =
+            space_manager.allocate(t, order++);
+        new_leaf_continuation = t.get_page<LeafNodeContinuationPage>(
+            new_leaf_continuation_page_number);
+        prev.write(&LeafNodeContinuationPage::next,
+                   new_leaf_continuation_page_number);
+        prev = whl::move(new_leaf_continuation);
+        continuation_regions--;
+      }
+    }
+
+    // Write key and value length
+    char buf[entries[0].key.size() + 1 + sizeof(uint64_t)];
+    memcpy(buf, entries[0].key.c_str(), entries[0].key.size() + 1);
+    uint64_t value_length = entries[0].value.size();
+    memcpy(buf + entries[0].key.size() + 1, &value_length, sizeof(uint64_t));
+
+    // Write value
+    BigValue bv(&t, new_leaf_start_page_number,
+                entries[0].key.size() + 1 + sizeof(uint64_t));
+    bv.write(0, entries[0].value.data_ptr(), entries[0].value.size());
   } else {
     // If entries cannot fit in a leaf and there is more than one, create
     // internal node
@@ -217,7 +260,7 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
           "create_subtree: parent entry points to internal node");
     }
 
-    space_manager.free(t, parent_entry_page, 0);
+    free_leaf(t, parent_entry_page);
   }
 
   // Update parent entry
@@ -278,17 +321,22 @@ void DiskMap::update_value_trivially(WAL::PageHandle<LeafNodeStartPage> &leaf,
              update_buffer);
 }
 
+void DiskMap::free_leaf(WAL::RWTransaction &t, int64_t page_number) {
+  // Relies on LeafNodeContinuationPage and LeafNodeStartPage sharing layout
+  int order = 0;
+  while (true) {
+    auto page = t.get_page<LeafNodeContinuationPage>(page_number);
+    space_manager.free(t, page_number, order++);
+    if (page.ro_data()->next == 0)
+      break;
+    page_number = page.ro_data()->next;
+  }
+}
+
 void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
                     size_t length) {
   if (key.size() == 0 || buffer == nullptr) {
     throw DiskMapException("write: invalid input parameters");
-  }
-  if (key.size() + 1 + sizeof(uint64_t) + length >
-      LeafNodeStartPage::capacity()) {
-    // TODO: handle writes where length exceeds capacity so we need to
-    // immediately chunk-split the value
-    throw DiskMapException(
-        "write: key-value pair size exceeds single page capacity");
   }
 
   // Traverse tree to find location
@@ -329,6 +377,12 @@ void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
 
   if (entry_offset != -1) {
     // Update existing entry
+    if (leaf.ro_data()->next != 0) {
+      // Remove old multi-region value
+      free_leaf(t, leaf.get_page());
+      parent.write(&InternalNodePage::entries, parent_entry,
+                   static_cast<int64_t>(0));
+    }
     int value_length_offset = entry_offset + key.size() + 1;
     size_t current_value_length = *reinterpret_cast<const uint64_t *>(
         leaf.ro_data()->data + value_length_offset);
@@ -380,7 +434,7 @@ void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
             value.resize(length);
             memcpy(value.data_ptr(), buffer, length);
             new_entries.push_back(KVEntry{.key = key, .value = value});
-            create_subtree(t, parent, parent_entry, parent_depth, new_entries);
+            create_subtree(t, parent, new_bucket, parent_depth, new_entries);
             break;
           }
         }
@@ -426,9 +480,7 @@ void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
 
 whl::vector<char> DiskMap::read(WAL::ROTransaction &t, whl::string &key,
                                 bool &found) {
-  // TODO: multi-page values
-  // ROOT_PAGE marked as internal with MSB set
-  int64_t page = set_msb(ROOT_PAGE, 1);
+  int64_t page = set_msb(ROOT_PAGE, 1); // ROOT_PAGE marked as internal with MSB
   int depth = 0;
 
   while (true) {
@@ -455,7 +507,12 @@ whl::vector<char> DiskMap::read(WAL::ROTransaction &t, whl::string &key,
 
       // Copy value into return buffer
       whl::vector<char> buffer(length);
-      memcpy(buffer.data_ptr(), leaf.ro_data()->data + offset, length);
+      if (leaf.ro_data()->next != 0) {
+        BigValue bv(&t, page, offset);
+        bv.read(0, buffer.data_ptr(), length);
+      } else {
+        memcpy(buffer.data_ptr(), leaf.ro_data()->data + offset, length);
+      }
       found = true;
       return buffer;
     }
@@ -518,7 +575,7 @@ bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
 
   if (leaf.ro_data()->entry_count == 1) {
     // Free the leaf node - it will be cleared when reallocated
-    space_manager.free(t, leaf.get_page(), 0);
+    free_leaf(t, leaf.get_page());
 
     // Update parent
     parent.write(&InternalNodePage::entries, parent_entry,
@@ -611,10 +668,10 @@ void DiskMap::debug_dump_recursive(WAL::ROTransaction &t, int64_t page,
     // Leaf node
     WAL::ROPageHandle<LeafNodeStartPage> leaf =
         t.get_page<LeafNodeStartPage>(page);
-    printf("Page 0x%lx (leaf, parent_index=%d, entry_count=%d, order=%d, "
+    printf("Page 0x%lx (leaf, parent_index=%d, entry_count=%d, "
            "usage=%zu)\n",
            page, parent_index, leaf.ro_data()->entry_count,
-           leaf.ro_data()->order, leaf.ro_data()->usage);
+           leaf.ro_data()->usage);
 
     const char *ptr = static_cast<const char *>(leaf.ro_data()->data);
     int entry_count = 0;
