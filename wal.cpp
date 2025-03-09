@@ -91,9 +91,11 @@ void WAL::apply_record(InMemoryWALRecord &record) {
     BufferPool::PageHandle handle =
         pool->get_page(record.header.set.loc / PAGE_SIZE, false);
     // Set new value
-    memcpy(handle.data() + (record.header.set.loc % PAGE_SIZE),
-           &record.data[record.header.set.old_value_len],
-           record.header.set.new_value_len);
+    if (record.header.set.new_value_len > 0) {
+      memcpy(handle.data() + (record.header.set.loc % PAGE_SIZE),
+             &record.data[record.header.set.old_value_len],
+             record.header.set.new_value_len);
+    }
     // Fill zeros after new value
     uint32_t zeros = record.header.set.length - record.header.set.new_value_len;
     memset(handle.data() + (record.header.set.loc % PAGE_SIZE) +
@@ -360,8 +362,8 @@ void WAL::abort(uint32_t txn_id) {
   checkpoint_cv.broadcast();
 }
 
-void WAL::set(uint32_t txn_id, uint64_t loc, size_t length, size_t to_length,
-              const char *data) {
+void WAL::set(uint32_t txn_id, uint64_t loc, size_t data_length,
+              size_t write_length, const char *data) {
   whl::mutex_guard _(&wal_mutex);
   InMemoryWALRecord new_record;
   new_record.header.common_header.type = WALRecordType::SET;
@@ -370,20 +372,20 @@ void WAL::set(uint32_t txn_id, uint64_t loc, size_t length, size_t to_length,
 
   // Read old value
   BufferPool::PageHandle handle = pool->get_page(loc / PAGE_SIZE, false);
-  char old_value[length];
-  memcpy(old_value, handle.data() + (loc % PAGE_SIZE), length);
-  size_t from_length = get_unpadded_length(length, old_value);
+  char old_value[write_length];
+  memcpy(old_value, handle.data() + (loc % PAGE_SIZE), write_length);
+  size_t from_length = get_unpadded_length(write_length, old_value);
 
   // Set header
   new_record.header.set.loc = loc;
-  new_record.header.set.length = length;
+  new_record.header.set.length = write_length;
   new_record.header.set.old_value_len = from_length;
-  new_record.header.set.new_value_len = to_length;
+  new_record.header.set.new_value_len = data_length;
 
   // Set data to old value + new value
-  new_record.data.resize(from_length + to_length);
+  new_record.data.resize(from_length + data_length);
   memcpy(new_record.data.data_ptr(), old_value, from_length);
-  memcpy(new_record.data.data_ptr() + from_length, data, to_length);
+  memcpy(new_record.data.data_ptr() + from_length, data, data_length);
 
   new_record.header.common_header.checksum = checksum(new_record);
   records.push_back(new_record);
@@ -442,6 +444,7 @@ void WAL::checkpoint() {
 WAL::ROTransaction WAL::begin_ro_transaction() { return ROTransaction(this); }
 WAL::RWTransaction WAL::begin_rw_transaction() {
   uint32_t txn_id = begin();
+  transactions_since_last_checkpoint++;
   return RWTransaction(this, txn_id);
 }
 

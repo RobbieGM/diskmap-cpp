@@ -94,8 +94,8 @@ class WAL : AbstractWAL {
   uint32_t begin(); // Returns txn id
   void commit(uint32_t txn_id);
   void abort(uint32_t txn_id);
-  void set(uint32_t txn_id, uint64_t loc, size_t length, size_t to_length,
-           const char *data);
+  void set(uint32_t txn_id, uint64_t loc, size_t data_length,
+           size_t write_length, const char *data);
 
   friend class Transaction;
   friend class PageHandle;
