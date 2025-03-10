@@ -388,8 +388,9 @@ void WAL::set(uint32_t txn_id, uint64_t loc, size_t data_length,
   memcpy(new_record.data.data_ptr() + from_length, data, data_length);
 
   new_record.header.common_header.checksum = checksum(new_record);
-  records.push_back(new_record);
-  apply_record(new_record);
+  apply_record(
+      new_record); // Probably safe to apply first since we hold the lock.
+  records.push_back(whl::move(new_record));
 }
 
 void *WAL::checkpointing_thread_func(void *arg) {

@@ -363,7 +363,7 @@ void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
     entry.key = key;
     entry.value.resize(length);
     memcpy(entry.value.data_ptr(), buffer, length);
-    entries.push_back(entry);
+    entries.push_back(whl::move(entry));
     create_subtree(t, parent, parent_entry, parent_depth, entries);
     auto meta = t.get_page<MetaPage>(0);
     meta.write(&MetaPage::kv_entry_count, meta.ro_data()->kv_entry_count + 1);
@@ -433,7 +433,8 @@ void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
             whl::vector<char> value;
             value.resize(length);
             memcpy(value.data_ptr(), buffer, length);
-            new_entries.push_back(KVEntry{.key = key, .value = value});
+            new_entries.push_back(
+                KVEntry{.key = key, .value = whl::move(value)});
             create_subtree(t, parent, new_bucket, parent_depth, new_entries);
             break;
           }
@@ -534,7 +535,6 @@ whl::vector<char> DiskMap::read(WAL::ROTransaction &t, whl::string &key,
 }
 
 bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
-  // TODO: multi-page values
   // ROOT_PAGE marked as internal with MSB set
   WAL::PageHandle<InternalNodePage> parent =
       t.get_page<InternalNodePage>(ROOT_PAGE);
