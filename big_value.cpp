@@ -1,5 +1,7 @@
 #include "big_value.h"
+#include "exception.h"
 #include "page_types.h"
+#include "space_manager.h"
 
 namespace diskmap {
 
@@ -47,7 +49,7 @@ void BigValue::rw_impl(size_t offset, char *buffer, size_t length,
     value_offset += distance;
   }
 
-  // Read the value
+  // Read or write the value
   while (value_offset < end_offset) {
     size_t distance = end_offset - value_offset;
     size_t page_skip =
@@ -60,11 +62,11 @@ void BigValue::rw_impl(size_t offset, char *buffer, size_t length,
       auto page = dynamic_cast<WAL::RWTransaction *>(txn)->get_page<MetaPage>(
           region_start_page + region_offset);
       page.write(start_offset(current_page_type) + page_offset,
-                 buffer + value_offset, length_in_page);
+                 buffer + value_offset - offset, length_in_page);
     } else {
       auto page = txn->get_page<MetaPage>(region_start_page + region_offset);
       memcpy(
-          buffer + value_offset,
+          buffer + value_offset - offset,
           static_cast<const char *>(static_cast<const void *>(page.ro_data())) +
               start_offset(current_page_type) + page_offset,
           length_in_page);
@@ -74,9 +76,13 @@ void BigValue::rw_impl(size_t offset, char *buffer, size_t length,
     if (distance > page_skip) {
       region_offset++;
       current_page_type = LeafPageType::PURE;
-      if (region_offset == 1 << (depth + 1)) {
+      page_offset = 0;
+      if (region_offset == 1 << depth) {
         depth++;
         region_start_page = next_region_start(region_start_page);
+        if (region_start_page == 0) {
+          throw DiskMapException("Invalid next pointer in big value");
+        }
         current_page_type = LeafPageType::CONTINUATION;
         region_offset = 0;
       }
@@ -88,12 +94,18 @@ void BigValue::read(size_t offset, char *buffer, size_t length) {
   rw_impl(offset, buffer, length, false);
 }
 
-void BigValue::write(size_t offset, const char *buffer, size_t length) {
+void BigValue::write(size_t offset, const char *buffer, size_t length,
+                     SpaceManager &space_manager) {
+  // Ensure there are enough pages to fit the value
+  size_t max_value_size = offset + length;
+  create_continuation_regions(value_offset_in_start_page + max_value_size,
+                              space_manager);
+  // Write the value
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
   rw_impl(offset, const_cast<char *>(buffer), length, true);
 }
 
-int BigValue::required_continuation_pages(size_t entry_size) {
+int BigValue::required_continuation_regions(size_t entry_size) {
   int result = 0;
   size_t capacity = LeafNodeStartPage::capacity();
   while (capacity < entry_size) {
@@ -103,6 +115,42 @@ int BigValue::required_continuation_pages(size_t entry_size) {
     result++;
   }
   return result;
+}
+
+void BigValue::create_continuation_regions(size_t entry_size,
+                                           SpaceManager &space_manager) {
+  int continuation_regions =
+      BigValue::required_continuation_regions(entry_size);
+  auto &rw_txn = *dynamic_cast<WAL::RWTransaction *>(txn);
+  WAL::PageHandle<LeafNodeStartPage> leaf_start =
+      rw_txn.get_page<LeafNodeStartPage>(start_page);
+  leaf_start.write(&LeafNodeStartPage::usage, entry_size);
+  leaf_start.write(&LeafNodeStartPage::entry_count, static_cast<uint16_t>(1));
+  // Create linked list of continuation pages
+  if (continuation_regions > 0) {
+    int order = 1;
+    int64_t continuation_page_number = leaf_start.ro_data()->next;
+    if (continuation_page_number == 0) {
+      continuation_page_number = space_manager.allocate(rw_txn, order++);
+      leaf_start.write(&LeafNodeStartPage::next, continuation_page_number);
+    }
+    WAL::PageHandle<LeafNodeContinuationPage> continuation_page =
+        rw_txn.get_page<LeafNodeContinuationPage>(continuation_page_number);
+    WAL::PageHandle<LeafNodeContinuationPage> prev =
+        whl::move(continuation_page);
+    continuation_regions--;
+    while (continuation_regions > 0) {
+      continuation_page_number = prev.ro_data()->next;
+      if (continuation_page_number == 0) {
+        continuation_page_number = space_manager.allocate(rw_txn, order++);
+        prev.write(&LeafNodeContinuationPage::next, continuation_page_number);
+      }
+      continuation_page =
+          rw_txn.get_page<LeafNodeContinuationPage>(continuation_page_number);
+      prev = whl::move(continuation_page);
+      continuation_regions--;
+    }
+  }
 }
 
 } // namespace diskmap

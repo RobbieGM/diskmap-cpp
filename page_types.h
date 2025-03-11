@@ -58,7 +58,7 @@ struct LeafNodeStartPage {
    * 3. Value data: <length> bytes
    */
   char data[];
-  static size_t capacity() {
+  constexpr static size_t capacity() {
     // Subtract usage of page header
     return PAGE_SIZE - offsetof(LeafNodeStartPage, data);
   }
@@ -79,6 +79,9 @@ inline const char *end_of(const void *page) {
 struct KVEntry {
   whl::string key;
   whl::vector<char> value;
+  KVEntry() = default;
+  KVEntry(const whl::string &key, whl::vector<char> &&value)
+      : key(key), value(whl::move(value)) {}
 };
 
 }; // namespace diskmap

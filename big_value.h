@@ -1,6 +1,7 @@
 #pragma once
 
 #include "page_types.h"
+#include "space_manager.h"
 #include "wal.h"
 #include <functional>
 #include <wheel.h>
@@ -35,16 +36,21 @@ class BigValue {
         ->next;
   }
 
+  // Calculate the number of continuation regions needed to store an entry with
+  // a given size (including key and value).
+  static int required_continuation_regions(size_t entry_size);
+
+  void create_continuation_regions(size_t entry_size,
+                                   SpaceManager &space_manager);
+
   void rw_impl(size_t offset, char *buffer, size_t length, bool is_write);
 
 public:
   BigValue(WAL::ROTransaction *txn, uint64_t page, size_t offset)
       : txn(txn), start_page(page), value_offset_in_start_page(offset) {}
   void read(size_t offset, char *buffer, size_t length);
-  void write(size_t offset, const char *buffer, size_t length);
-  // Calculate the number of continuation regions needed to store an entry with
-  // a given size (including key and value).
-  static int required_continuation_pages(size_t entry_size);
+  void write(size_t offset, const char *buffer, size_t length,
+             SpaceManager &space_manager);
 };
 
 } // namespace diskmap

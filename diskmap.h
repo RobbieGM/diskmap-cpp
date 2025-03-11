@@ -38,6 +38,12 @@ class DiskMap {
   static int get_bucket(whl::string &key, int depth);
   static int get_bucket(uint64_t hash, int depth);
 
+  // Helper method to find the correct parent node for a key, and the index of
+  // the entry that should point to the leaf node containing the key.
+  template <typename Transaction>
+  static auto find_parent(Transaction &t, whl::string &key, int &parent_entry,
+                          int &parent_depth);
+
   // Helper method to find entry position in leaf node. Makes the assumption
   // that all entries in leaf nodes occur within the first page of the leaf
   // node, which should be true with proper splitting. Returns pointer to entry
@@ -64,13 +70,16 @@ class DiskMap {
                       const whl::vector<KVEntry> &entries);
 
   whl::vector<char> read(WAL::ROTransaction &t, whl::string &key, bool &found);
-  // whl::vector<char> read_part(WAL::Transaction &t, whl::string &key,
-  //                             size_t offset, size_t length,
-  //                             bool &found); // TODO
+  whl::vector<char> read_part(WAL::ROTransaction &t, whl::string &key,
+                              size_t offset, size_t length, bool &found);
+  void write_at_node(WAL::RWTransaction &t,
+                     WAL::PageHandle<InternalNodePage> parent, int parent_entry,
+                     int parent_depth, whl::string &key, const void *buffer,
+                     size_t length);
   void write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
              size_t length);
-  // void append(WAL::Transaction &t, whl::string &key, void *buffer,
-  //             size_t length); // TODO
+  void append(WAL::RWTransaction &t, whl::string &key, void *buffer,
+              size_t length);
   bool remove(WAL::RWTransaction &t, whl::string &key);
 
   void debug_dump(WAL::ROTransaction &t);
@@ -95,9 +104,8 @@ public:
                            whl::rw_mutex_guard::Mode mode);
 
     whl::vector<char> read(whl::string key, bool &found);
-    // whl::vector<char> read_part(whl::string key, size_t offset, size_t
-    // length,
-    //                             bool &found);
+    whl::vector<char> read_part(whl::string key, size_t offset, size_t length,
+                                bool &found);
     void debug_dump();
   };
 
@@ -111,7 +119,7 @@ public:
     void abort();
 
     void write(whl::string key, const void *buffer, size_t length);
-    // void append(whl::string key, void *buffer, size_t length);
+    void append(whl::string key, void *buffer, size_t length);
     bool remove(whl::string key);
   };
 

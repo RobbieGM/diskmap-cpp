@@ -1,8 +1,7 @@
 #include "diskmap.h"
 #include "big_value.h"
+#include "exception.h"
 #include "page_types.h"
-#include <cstdio>
-#include <cstdlib>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -78,6 +77,37 @@ int DiskMap::get_bucket(whl::string &key, int depth) {
   uint64_t hash = hash_key->hash();
   return get_bucket(hash, depth);
 }
+
+template <typename Transaction>
+auto DiskMap::find_parent(Transaction &t, whl::string &key, int &parent_entry,
+                          int &parent_depth) {
+  auto parent = t.template get_page<InternalNodePage>(ROOT_PAGE);
+  parent_depth = 0;
+  parent_entry = 0;
+  int64_t parent_entry_value = 0;
+  while (true) {
+    parent_entry = get_bucket(key, parent_depth + 1);
+    parent_entry_value = parent.ro_data()->entries[parent_entry];
+    bool points_to_leaf = get_msb(parent_entry_value) == 0;
+    if (parent_entry_value == 0 || points_to_leaf) {
+      break;
+    }
+    parent =
+        t.template get_page<InternalNodePage>(clear_msb(parent_entry_value));
+    parent_depth++;
+  }
+  return parent;
+}
+
+// Explicit template instantiations for find_parent
+template auto DiskMap::find_parent<WAL::RWTransaction>(WAL::RWTransaction &t,
+                                                       whl::string &key,
+                                                       int &parent_entry,
+                                                       int &parent_depth);
+template auto DiskMap::find_parent<WAL::ROTransaction>(WAL::ROTransaction &t,
+                                                       whl::string &key,
+                                                       int &parent_entry,
+                                                       int &parent_depth);
 
 int DiskMap::get_bucket(uint64_t hash, int depth) {
   // Depth argument for get bucket refers to depth of internal node that is the
@@ -185,49 +215,27 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
     new_parent_entry = set_msb(new_leaf_page_number, 0);
   } else if (entries.size() == 1) {
     // Use one leaf node with linked list of continuation pages
-    int continuation_regions =
-        BigValue::required_continuation_pages(total_entries_size);
     int64_t new_leaf_start_page_number = space_manager.allocate(t, 0);
     WAL::PageHandle<LeafNodeStartPage> new_leaf_start =
         t.get_page<LeafNodeStartPage>(new_leaf_start_page_number);
     new_leaf_start.write(&LeafNodeStartPage::usage, total_entries_size);
     new_leaf_start.write(&LeafNodeStartPage::entry_count,
                          static_cast<uint16_t>(1));
-    // Create linked list of continuation pages
-    if (continuation_regions > 0) {
-      int order = 1;
-      int64_t new_leaf_continuation_page_number =
-          space_manager.allocate(t, order++);
-      WAL::PageHandle<LeafNodeContinuationPage> new_leaf_continuation =
-          t.get_page<LeafNodeContinuationPage>(
-              new_leaf_continuation_page_number);
-      new_leaf_start.write(&LeafNodeStartPage::next,
-                           new_leaf_continuation_page_number);
-      WAL::PageHandle<LeafNodeContinuationPage> prev =
-          whl::move(new_leaf_continuation);
-      continuation_regions--;
-      while (continuation_regions > 0) {
-        int64_t new_leaf_continuation_page_number =
-            space_manager.allocate(t, order++);
-        new_leaf_continuation = t.get_page<LeafNodeContinuationPage>(
-            new_leaf_continuation_page_number);
-        prev.write(&LeafNodeContinuationPage::next,
-                   new_leaf_continuation_page_number);
-        prev = whl::move(new_leaf_continuation);
-        continuation_regions--;
-      }
-    }
 
     // Write key and value length
     char buf[entries[0].key.size() + 1 + sizeof(uint64_t)];
     memcpy(buf, entries[0].key.c_str(), entries[0].key.size() + 1);
     uint64_t value_length = entries[0].value.size();
     memcpy(buf + entries[0].key.size() + 1, &value_length, sizeof(uint64_t));
+    new_leaf_start.write(&LeafNodeStartPage::data, 0, sizeof(buf), buf);
 
     // Write value
     BigValue bv(&t, new_leaf_start_page_number,
                 entries[0].key.size() + 1 + sizeof(uint64_t));
-    bv.write(0, entries[0].value.data_ptr(), entries[0].value.size());
+    bv.write(0, entries[0].value.data_ptr(), entries[0].value.size(),
+             space_manager);
+
+    new_parent_entry = set_msb(new_leaf_start_page_number, 0);
   } else {
     // If entries cannot fit in a leaf and there is more than one, create
     // internal node
@@ -339,31 +347,26 @@ void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
     throw DiskMapException("write: invalid input parameters");
   }
 
-  // Traverse tree to find location
-  WAL::PageHandle<InternalNodePage> parent =
-      t.get_page<InternalNodePage>(ROOT_PAGE);
-  int parent_depth = 0;
   int parent_entry = 0;
-  int64_t parent_entry_value = 0;
-  while (true) {
-    parent_entry = get_bucket(key, parent_depth + 1);
-    parent_entry_value = parent.ro_data()->entries[parent_entry];
-    bool points_to_leaf = get_msb(parent_entry_value) == 0;
-    if (parent_entry_value == 0 || points_to_leaf) {
-      break;
-    }
-    parent = t.get_page<InternalNodePage>(clear_msb(parent_entry_value));
-    parent_depth++;
-  }
+  int parent_depth = 0;
+  WAL::PageHandle<InternalNodePage> parent =
+      find_parent(t, key, parent_entry, parent_depth);
 
+  write_at_node(t, whl::move(parent), parent_entry, parent_depth, key, buffer,
+                length);
+}
+
+void DiskMap::write_at_node(WAL::RWTransaction &t,
+                            WAL::PageHandle<InternalNodePage> parent,
+                            int parent_entry, int parent_depth,
+                            whl::string &key, const void *buffer,
+                            size_t length) {
+  int64_t parent_entry_value = parent.ro_data()->entries[parent_entry];
   if (parent_entry_value == 0) {
     // Need to create subtree
     whl::vector<KVEntry> entries;
-    KVEntry entry;
-    entry.key = key;
-    entry.value.resize(length);
-    memcpy(entry.value.data_ptr(), buffer, length);
-    entries.push_back(whl::move(entry));
+    entries.push_back(KVEntry(
+        key, whl::vector<char>(static_cast<const char *>(buffer), length)));
     create_subtree(t, parent, parent_entry, parent_depth, entries);
     auto meta = t.get_page<MetaPage>(0);
     meta.write(&MetaPage::kv_entry_count, meta.ro_data()->kv_entry_count + 1);
@@ -403,52 +406,13 @@ void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
     }
   } else {
     // Add a new entry
+
+    auto meta = t.get_page<MetaPage>(0);
+    meta.write(&MetaPage::kv_entry_count, meta.ro_data()->kv_entry_count + 1);
+
     size_t entry_size = key.size() + 1 + sizeof(uint64_t) + length;
-    if (leaf.ro_data()->usage + entry_size > LeafNodeStartPage::capacity()) {
-      // Leaf needs to be split
-      if (leaf.ro_data()->entry_count == 1) {
-        // Create new internal node(s) pointing to original leaf and a new leaf
-        // containing the new key-value pair.
-        whl::string existing_key = get_entries_in_leaf(leaf.ro_data())[0].key;
-        // Keep creating internal nodes until the buckets don't collide anymore
-        while (true) {
-          int new_bucket = get_bucket(key, parent_depth + 1);
-          int existing_key_bucket = get_bucket(existing_key, parent_depth + 1);
-          if (existing_key_bucket == new_bucket) {
-            // Create another internal node
-            int64_t new_internal_page_number = space_manager.allocate(t, 0);
-            WAL::PageHandle<InternalNodePage> new_internal =
-                t.get_page<InternalNodePage>(new_internal_page_number);
-            parent.write(&InternalNodePage::entries, new_bucket,
-                         set_msb(new_internal_page_number, 1));
-            parent = whl::move(new_internal);
-            parent_depth++;
-          } else {
-            // Link parent to existing leaf
-            parent.write(&InternalNodePage::entries, existing_key_bucket,
-                         set_msb(leaf_page_number, 0));
 
-            // Create new leaf
-            whl::vector<KVEntry> new_entries;
-            whl::vector<char> value;
-            value.resize(length);
-            memcpy(value.data_ptr(), buffer, length);
-            new_entries.push_back(
-                KVEntry{.key = key, .value = whl::move(value)});
-            create_subtree(t, parent, new_bucket, parent_depth, new_entries);
-            break;
-          }
-        }
-      } else {
-        // Rebuild tree
-        auto entries = get_entries_in_leaf(leaf.ro_data());
-        entries.push_back({key, whl::vector<char>(length)});
-        entries.back().value.resize(length);
-        memcpy(entries.back().value.data_ptr(), buffer, length);
-
-        create_subtree(t, parent, parent_entry, parent_depth, entries);
-      }
-    } else {
+    if (leaf.ro_data()->usage + entry_size <= LeafNodeStartPage::capacity()) {
       // Just append the new key-value pair to the leaf
       // Update range: append_ptr to append_ptr + key size + null term + 8 +
       // value size
@@ -473,65 +437,155 @@ void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
       leaf.write(&LeafNodeStartPage::usage, leaf.ro_data()->usage + entry_size);
       leaf.write(&LeafNodeStartPage::entry_count,
                  static_cast<uint16_t>(leaf.ro_data()->entry_count + 1));
+      return;
     }
-    auto meta = t.get_page<MetaPage>(0);
-    meta.write(&MetaPage::kv_entry_count, meta.ro_data()->kv_entry_count + 1);
+
+    // Leaf needs to be split
+    if (leaf.ro_data()->entry_count == 1) {
+      // Create new internal node(s) pointing to original leaf and a new leaf
+      // containing the new key-value pair.
+      whl::string existing_key = get_entries_in_leaf(leaf.ro_data())[0].key;
+      // Keep creating internal nodes until the buckets don't collide anymore
+      while (true) {
+        int new_bucket = get_bucket(key, parent_depth + 1);
+        int existing_key_bucket = get_bucket(existing_key, parent_depth + 1);
+        if (existing_key_bucket == new_bucket) {
+          // Create another internal node
+          int64_t new_internal_page_number = space_manager.allocate(t, 0);
+          WAL::PageHandle<InternalNodePage> new_internal =
+              t.get_page<InternalNodePage>(new_internal_page_number);
+          parent.write(&InternalNodePage::entries, new_bucket,
+                       set_msb(new_internal_page_number, 1));
+          parent = whl::move(new_internal);
+          parent_depth++;
+        } else {
+          // Link parent to existing leaf
+          parent.write(&InternalNodePage::entries, existing_key_bucket,
+                       set_msb(leaf_page_number, 0));
+
+          // Create new leaf
+          whl::vector<KVEntry> new_entries;
+          new_entries.push_back(
+              KVEntry(key, whl::vector<char>(static_cast<const char *>(buffer),
+                                             length)));
+          create_subtree(t, parent, new_bucket, parent_depth, new_entries);
+          break;
+        }
+      }
+    } else {
+      // Rebuild tree
+      auto entries = get_entries_in_leaf(leaf.ro_data());
+      entries.push_back({key, whl::vector<char>(length)});
+      entries.back().value.resize(length);
+      memcpy(entries.back().value.data_ptr(), buffer, length);
+
+      create_subtree(t, parent, parent_entry, parent_depth, entries);
+    }
   }
 }
 
+void DiskMap::append(WAL::RWTransaction &t, whl::string &key, void *buffer,
+                     size_t append_length) {
+  int parent_entry = 0;
+  int parent_depth = 0;
+  WAL::PageHandle<InternalNodePage> parent =
+      find_parent(t, key, parent_entry, parent_depth);
+  int64_t parent_entry_value = parent.ro_data()->entries[parent_entry];
+
+  if (parent_entry_value == 0) {
+    // Key doesn't exist
+    write_at_node(t, whl::move(parent), parent_entry, parent_depth, key, buffer,
+                  append_length);
+    return;
+  }
+  int64_t leaf_page_number = clear_msb(parent_entry_value);
+  WAL::PageHandle<LeafNodeStartPage> leaf =
+      t.get_page<LeafNodeStartPage>(leaf_page_number);
+
+  int entry_offset = find_entry_in_leaf(leaf.ro_data(), key);
+  if (entry_offset == -1) {
+    // Key doesn't exist
+    write_at_node(t, whl::move(parent), parent_entry, parent_depth, key, buffer,
+                  append_length);
+    return;
+  }
+
+  // Key exists
+  int value_length_offset = entry_offset + key.size() + 1;
+  uint64_t existing_length = *reinterpret_cast<const uint64_t *>(
+      leaf.ro_data()->data + value_length_offset);
+  int offset = value_length_offset + sizeof(uint64_t);
+
+  if (leaf.ro_data()->entry_count == 1) {
+    // Use big value approach
+    BigValue bv(&t, leaf.get_page(), offset);
+    bv.write(existing_length, static_cast<const char *>(buffer), append_length,
+             space_manager);
+
+    uint64_t new_value_length = existing_length + append_length;
+    char buffer[8];
+    memcpy(buffer, &new_value_length, 8);
+    leaf.write(&LeafNodeStartPage::data, value_length_offset, 8, buffer);
+    leaf.write(&LeafNodeStartPage::usage,
+               leaf.ro_data()->usage + append_length);
+  } else {
+    // Read existing value, append, and rewrite
+    whl::vector<char> new_value(existing_length + append_length);
+    memcpy(new_value.data_ptr(), leaf.ro_data()->data + offset,
+           existing_length);
+    memcpy(new_value.data_ptr() + existing_length, buffer, append_length);
+
+    write_at_node(t, whl::move(parent), parent_entry, parent_depth, key,
+                  new_value.data_ptr(), new_value.size());
+  }
+}
+
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 whl::vector<char> DiskMap::read(WAL::ROTransaction &t, whl::string &key,
                                 bool &found) {
-  int64_t page = set_msb(ROOT_PAGE, 1); // ROOT_PAGE marked as internal with MSB
-  int depth = 0;
+  return read_part(t, key, 0, -1UL, found);
+}
 
-  while (true) {
-    // Check if we've reached a leaf node by checking MSB
-    if (!get_msb(page)) {
-      // LeafNodeStartPage *leaf = leaf_node(page);
-      WAL::ROPageHandle<LeafNodeStartPage> leaf =
-          t.get_page<LeafNodeStartPage>(page);
-      int entry_offset = find_entry_in_leaf(leaf.ro_data(), key);
-      int offset = entry_offset;
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+whl::vector<char> DiskMap::read_part(WAL::ROTransaction &t, whl::string &key,
+                                     size_t read_offset, size_t read_length,
+                                     bool &found) {
+  int parent_entry{};
+  int parent_depth{};
+  auto parent = find_parent(t, key, parent_entry, parent_depth);
+  int64_t parent_entry_value = parent.ro_data()->entries[parent_entry];
 
-      if (entry_offset == -1) {
-        found = false;
-        return whl::vector<char>();
-      }
-
-      // Skip past the key string
-      offset += key.size() + 1;
-
-      // Get the value length
-      uint64_t length =
-          *reinterpret_cast<const uint64_t *>(leaf.ro_data()->data + offset);
-      offset += sizeof(uint64_t);
-
-      // Copy value into return buffer
-      whl::vector<char> buffer(length);
-      if (leaf.ro_data()->next != 0) {
-        BigValue bv(&t, page, offset);
-        bv.read(0, buffer.data_ptr(), length);
-      } else {
-        memcpy(buffer.data_ptr(), leaf.ro_data()->data + offset, length);
-      }
-      found = true;
-      return buffer;
-    }
-
-    // We're in an internal node
-    page = clear_msb(page);
-    WAL::ROPageHandle<InternalNodePage> node =
-        t.get_page<InternalNodePage>(page);
-    int64_t bucket = get_bucket(key, depth + 1);
-
-    if (node.ro_data()->entries[bucket] == 0) {
-      found = false;
-      return whl::vector<char>();
-    }
-
-    page = node.ro_data()->entries[bucket];
-    depth++;
+  if (get_msb(parent_entry_value)) {
+    found = false;
+    return whl::vector<char>();
   }
+
+  WAL::ROPageHandle<LeafNodeStartPage> leaf =
+      t.get_page<LeafNodeStartPage>(clear_msb(parent_entry_value));
+  int entry_offset = find_entry_in_leaf(leaf.ro_data(), key);
+
+  if (entry_offset == -1) {
+    found = false;
+    return whl::vector<char>();
+  }
+
+  int offset = entry_offset + key.size() + 1;
+  uint64_t length =
+      *reinterpret_cast<const uint64_t *>(leaf.ro_data()->data + offset);
+  read_length = whl::min(read_length, length - read_offset);
+  offset += sizeof(uint64_t);
+
+  whl::vector<char> buffer(read_length);
+  if (leaf.ro_data()->next != 0) {
+    BigValue bv(&t, leaf.get_page(), offset);
+    bv.read(read_offset, buffer.data_ptr(), read_length);
+  } else {
+    memcpy(buffer.data_ptr(), leaf.ro_data()->data + offset + read_offset,
+           read_length);
+  }
+
+  found = true;
+  return buffer;
 }
 
 bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
@@ -733,6 +787,13 @@ ro_cast(whl::unique_ptr<WAL::RWTransaction> tx) {
   return whl::unique_ptr<WAL::ROTransaction>(tx.release());
 }
 
+whl::vector<char> DiskMap::ROTransaction::read_part(whl::string key,
+                                                    size_t offset,
+                                                    size_t length,
+                                                    bool &found) {
+  return dm->read_part(*tx, key, offset, length, found);
+}
+
 whl::vector<char> DiskMap::ROTransaction::read(whl::string key, bool &found) {
   return dm->read(*tx, key, found);
 }
@@ -754,21 +815,16 @@ void DiskMap::RWTransaction::abort() {
   dynamic_cast<WAL::RWTransaction *>(tx.get())->abort();
 }
 
-// whl::vector<char> DiskMap::Transaction::read_part(whl::string key,
-//                                                   size_t offset, size_t
-//                                                   length, bool &found) {
-//   return dm->read_part(tx, key, offset, length, found);
-// }
-
 void DiskMap::RWTransaction::write(whl::string key, const void *buffer,
                                    size_t length) {
   dm->write(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key, buffer, length);
 }
 
-// void DiskMap::Transaction::append(whl::string key, void *buffer,
-//                                   size_t length) {
-//   dm->append(tx, key, buffer, length);
-// }
+void DiskMap::RWTransaction::append(whl::string key, void *buffer,
+                                    size_t length) {
+  dm->append(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key, buffer,
+             length);
+}
 
 bool DiskMap::RWTransaction::remove(whl::string key) {
   return dm->remove(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key);

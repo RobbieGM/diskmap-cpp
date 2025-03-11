@@ -1,0 +1,12 @@
+Page 0 (metadata):
+  kv_entry_count: 4
+  next_free_page: 59
+Page 0x1 (internal, parent_index=-1)
+  Page 0x2a (leaf, parent_index=280, entry_count=1, usage=12262)
+    Key: l1, Value length: 12251
+  Page 0x29 (leaf, parent_index=281, entry_count=1, usage=4078)
+    Key: l0, Value length: 4067
+  Page 0x34 (leaf, parent_index=283, entry_count=1, usage=28638)
+    Key: l2, Value length: 28627
+  Page 0x2d (leaf, parent_index=337, entry_count=1, usage=12263)
+    Key: lx, Value length: 12252
