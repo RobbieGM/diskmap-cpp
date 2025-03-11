@@ -1,0 +1,9 @@
+Page 0 (metadata):
+  kv_entry_count: 3
+  next_free_page: 43
+Page 0x1 (internal, parent_index=-1)
+  Page 0x2a (leaf, parent_index=445, entry_count=1, usage=16)
+    Key: b, Value length: 6
+  Page 0x29 (leaf, parent_index=446, entry_count=2, usage=33)
+    Key: a, Value length: 6
+    Key: ad, Value length: 6

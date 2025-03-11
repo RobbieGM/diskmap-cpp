@@ -1,30 +1,32 @@
+Incremental multi split:
+Page 0 (metadata):
+  kv_entry_count: 4
+  next_free_page: 48
+Page 0x1 (internal, parent_index=-1)
+  Page 0x2a (internal, parent_index=446)
+    Page 0x2c (internal, parent_index=219)
+      Page 0x2d (leaf, parent_index=219, entry_count=1, usage=513)
+        Key: ajos, Value length: 500
+      Page 0x2e (internal, parent_index=384)
+        Page 0x29 (leaf, parent_index=400, entry_count=1, usage=4010)
+          Key: a, Value length: 4000
+        Page 0x2f (leaf, parent_index=403, entry_count=1, usage=514)
+          Key: dmUpw, Value length: 500
+    Page 0x2b (leaf, parent_index=411, entry_count=1, usage=511)
+      Key: ad, Value length: 500
+Sudden multi split:
 Page 0 (metadata):
   kv_entry_count: 4
   next_free_page: 49
 Page 0x1 (internal, parent_index=-1)
-  Page 0x2a (internal, parent_index=342)
-    Page 0x2b (leaf, parent_index=386, entry_count=1, order=0, usage=511)
-      Key: dz, Value length: 500
-    Page 0x29 (internal, parent_index=413)
-      Page 0x2c (internal, parent_index=269)
-        Page 0x2f (leaf, parent_index=48, entry_count=1, order=0, usage=512)
-          Key: qvY, Value length: 500
-        Page 0x30 (leaf, parent_index=107, entry_count=1, order=0, usage=4013)
-          Key: aAPd, Value length: 4000
-      Page 0x2e (leaf, parent_index=272, entry_count=1, order=0, usage=512)
-        Key: uJi, Value length: 500
-Page 0 (metadata):
-  kv_entry_count: 4
-  next_free_page: 49
-Page 0x1 (internal, parent_index=-1)
-  Page 0x2a (internal, parent_index=342)
-    Page 0x2b (leaf, parent_index=386, entry_count=1, order=0, usage=511)
-      Key: dz, Value length: 500
-    Page 0x2c (internal, parent_index=413)
-      Page 0x2d (internal, parent_index=269)
-        Page 0x2e (leaf, parent_index=48, entry_count=1, order=0, usage=512)
-          Key: qvY, Value length: 500
-        Page 0x2f (leaf, parent_index=107, entry_count=1, order=0, usage=4013)
-          Key: aAPd, Value length: 4000
-      Page 0x30 (leaf, parent_index=272, entry_count=1, order=0, usage=512)
-        Key: uJi, Value length: 500
+  Page 0x2a (internal, parent_index=446)
+    Page 0x2b (internal, parent_index=219)
+      Page 0x2c (leaf, parent_index=219, entry_count=1, usage=513)
+        Key: ajos, Value length: 500
+      Page 0x2d (internal, parent_index=384)
+        Page 0x2e (leaf, parent_index=400, entry_count=1, usage=4010)
+          Key: a, Value length: 4000
+        Page 0x2f (leaf, parent_index=403, entry_count=1, usage=514)
+          Key: dmUpw, Value length: 500
+    Page 0x30 (leaf, parent_index=411, entry_count=1, usage=511)
+      Key: ad, Value length: 500

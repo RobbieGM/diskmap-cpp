@@ -1,14 +1,10 @@
 Page 0 (metadata):
-  kv_entry_count: 5
-  next_free_page: 46
+  kv_entry_count: 4
+  next_free_page: 43
 Page 0x1 (internal, parent_index=-1)
-  Page 0x2d (leaf, parent_index=8, entry_count=1, order=0, usage=1025)
-    Key: 111-, Value length: 1012
-  Page 0x29 (leaf, parent_index=199, entry_count=1, order=0, usage=20)
-    Key: 111, Value length: 8
-  Page 0x2c (leaf, parent_index=204, entry_count=1, order=0, usage=1024)
-    Key: 444, Value length: 1012
-  Page 0x2a (leaf, parent_index=382, entry_count=1, order=0, usage=1024)
-    Key: 222, Value length: 1012
-  Page 0x2b (leaf, parent_index=477, entry_count=1, order=0, usage=1024)
-    Key: 333, Value length: 1012
+  Page 0x2a (leaf, parent_index=445, entry_count=1, usage=21)
+    Key: b, Value length: 11
+  Page 0x29 (leaf, parent_index=446, entry_count=3, usage=65)
+    Key: a, Value length: 11
+    Key: ad, Value length: 11
+    Key: hK, Value length: 11

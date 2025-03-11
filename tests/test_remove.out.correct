@@ -1,9 +1,8 @@
 Page 0 (metadata):
   kv_entry_count: 2
-  next_free_page: 44
+  next_free_page: 45
 Page 0x1 (internal, parent_index=-1)
-  Page 0x29 (leaf, parent_index=199, entry_count=1, order=0, usage=20)
+  Page 0x29 (leaf, parent_index=400, entry_count=1, usage=20)
     Key: 111, Value length: 8
-  Page 0x2b (leaf, parent_index=204, entry_count=0, order=0, usage=0)
-  Page 0x2a (leaf, parent_index=342, entry_count=1, order=0, usage=20)
-    Key: uJi, Value length: 8
+  Page 0x2b (leaf, parent_index=432, entry_count=1, usage=19)
+    Key: aj, Value length: 8

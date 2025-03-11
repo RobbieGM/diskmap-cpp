@@ -22,6 +22,17 @@ int main() {
     tx.write(k1, b500, 500); // Split at root->342->413
     tx.write(k2, b500, 500); // Split at root->342->413->269
 
+    bool found{};
+    tx.read(k0, found);
+    assert(found);
+    tx.read(k1, found);
+    assert(found);
+    tx.read(k2, found);
+    assert(found);
+    tx.read(k3, found);
+    assert(found);
+
+    printf("Incremental multi split:\n");
     tx.debug_dump();
     tx.abort();
   }
@@ -37,6 +48,17 @@ int main() {
     tx.write(k2, b500, 500);
     tx.write(k3, b4000, 4000); // Cascading split
 
+    bool found{};
+    tx.read(k0, found);
+    assert(found);
+    tx.read(k1, found);
+    assert(found);
+    tx.read(k2, found);
+    assert(found);
+    tx.read(k3, found);
+    assert(found);
+
+    printf("Sudden multi split:\n");
     tx.debug_dump();
     tx.abort();
   }
