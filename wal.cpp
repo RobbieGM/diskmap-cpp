@@ -430,9 +430,9 @@ void WAL::checkpoint_periodically() {
     while (transactions_since_last_checkpoint < 50 && !shutting_down) {
       checkpoint_cv.wait(wal_mutex);
     }
+    checkpoint_internal();
     if (shutting_down)
       return;
-    checkpoint_internal();
     transactions_since_last_checkpoint = 0;
   }
 }
