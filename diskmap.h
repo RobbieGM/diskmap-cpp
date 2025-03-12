@@ -5,17 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <wheel.h>
-#include <whl_unique_ptr.h>
 
 namespace diskmap {
-
-// class LockManager {
-//   whl::unordered_map<int64_t, whl::mutex> locks;
-//   whl::mutex internal;
-
-// public:
-//   whl::mutex_guard get_guard(int64_t page);
-// };
 
 class DiskMap {
   static const char *MAGIC;
@@ -24,7 +15,6 @@ class DiskMap {
   whl::unique_ptr<BufferPool> buffer_pool;
   whl::unique_ptr<WAL> wal_layer;
   whl::rw_mutex global_lock;
-  // LockManager lock_manager;
 
   // Helper method to find the bucket for a given key in an internal node.
   // Explanation of depth:

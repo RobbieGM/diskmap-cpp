@@ -24,7 +24,7 @@ int main() {
   bool found{};
   auto read_value = tx.read("x", found);
   assert(found);
-  assert(value_len == read_value.size());
+  assert(read_value.size() == value_len);
   for (size_t i = 0; i < value_len; i++) {
     assert(read_value[i] == repeating_data[i % 251]);
   }
@@ -46,6 +46,24 @@ int main() {
   for (size_t i = 0; i < l1; i++) {
     assert(read_value[i] == data[i]);
   }
+
+  // Append to values in the same page, eventually causing a split
+  for (value_len = 0; value_len < 2500; value_len += 251) {
+    tx.append("a", repeating_data, 251);
+    tx.append("ad", repeating_data, 251);
+  }
   tx.commit();
+  read_value = tx.read("a", found);
+  assert(found);
+  assert(read_value.size() == value_len);
+  for (size_t i = 0; i < value_len; i++) {
+    assert(read_value[i] == repeating_data[i % 251]);
+  }
+  auto read_value2 = tx.read("ad", found);
+  assert(found);
+  assert(read_value2.size() == value_len);
+  for (size_t i = 0; i < value_len; i++) {
+    assert(read_value2[i] == repeating_data[i % 251]);
+  }
   return 0;
 }

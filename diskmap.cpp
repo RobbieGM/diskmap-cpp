@@ -162,8 +162,9 @@ DiskMap::get_entries_in_leaf(const LeafNodeStartPage *leaf) {
     ptr += entry.key.size() + 1;
     uint64_t value_length = *reinterpret_cast<const uint64_t *>(ptr);
     entry.value.resize(value_length);
-    ptr += sizeof(uint64_t) + value_length;
+    ptr += sizeof(uint64_t);
     memcpy(entry.value.data_ptr(), ptr, value_length);
+    ptr += value_length;
     result.push_back(entry);
   }
   return result;
