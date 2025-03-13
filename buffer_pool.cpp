@@ -77,6 +77,7 @@ pool_index_t BufferPool::retain(file_index_t file_index, bool advise_eviction) {
 }
 
 void BufferPool::release(pool_index_t pool_index) {
+  whl::mutex_guard _(&mutex);
   if (metadata[pool_index].refcount <= 0) {
     throw BufferPoolException();
   }
@@ -91,7 +92,6 @@ BufferPool::PageHandle::PageHandle(BufferPool *pool, file_index_t file_index,
     : pool(pool), pool_index(pool->retain(file_index, advise_eviction)) {}
 
 BufferPool::PageHandle::~PageHandle() {
-  whl::mutex_guard _(&pool->mutex);
   if (pool_index != -1) {
     pool->release(pool_index);
   }
