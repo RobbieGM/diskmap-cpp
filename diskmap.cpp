@@ -640,11 +640,11 @@ bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
     if (grandparent_entry != -1) {
       // Check parent's children
       int sibling_count = 0;
-      int64_t sibling_page = 0;
+      int64_t sibling_entry_value = 0;
 
       for (int i = 0; i < InternalNodePage::BRANCHING_FACTOR; i++) {
         if (parent.ro_data()->entries[i] != 0) {
-          sibling_page = parent.ro_data()->entries[i];
+          sibling_entry_value = parent.ro_data()->entries[i];
           sibling_count++;
           if (sibling_count > 1) {
             break;
@@ -655,7 +655,7 @@ bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
       if (sibling_count == 1) {
         // Update grandparent to point to the sibling
         grandparent.write(&InternalNodePage::entries, grandparent_entry,
-                          set_msb(sibling_page, 0));
+                          sibling_entry_value);
 
         // Free the parent node
         space_manager.free(t, parent.get_page(), 0);

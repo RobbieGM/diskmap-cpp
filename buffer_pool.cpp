@@ -50,6 +50,7 @@ pool_index_t BufferPool::retain(file_index_t file_index, bool advise_eviction) {
     } else {
       // Page is already in the pool
       pool_index = file_to_pool_index[file_index];
+      replacer.remove(pool_index);
     }
     metadata[pool_index].refcount++;
     metadata[pool_index].advise_eviction &= advise_eviction;
@@ -66,8 +67,11 @@ pool_index_t BufferPool::retain(file_index_t file_index, bool advise_eviction) {
            static_cast<long>(evicted_page_file_index * PAGE_SIZE));
   }
   if (needs_read) {
-    pread(fd, pages[pool_index].data, PAGE_SIZE,
-          static_cast<long>(file_index * PAGE_SIZE));
+    size_t bytes_read = pread(fd, pages[pool_index].data, PAGE_SIZE,
+                              static_cast<long>(file_index * PAGE_SIZE));
+    if (bytes_read == 0) {
+      memset(pages[pool_index].data, 0, PAGE_SIZE);
+    }
   }
   return pool_index;
 }
