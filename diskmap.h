@@ -62,6 +62,7 @@ class DiskMap {
   whl::vector<char> read(WAL::ROTransaction &t, whl::string &key, bool &found);
   whl::vector<char> read_part(WAL::ROTransaction &t, whl::string &key,
                               size_t offset, size_t length, bool &found);
+  whl::vector<KVEntry> sample(WAL::ROTransaction &t, size_t count);
   void write_at_node(WAL::RWTransaction &t,
                      WAL::PageHandle<InternalNodePage> parent, int parent_entry,
                      int parent_depth, whl::string &key, const void *buffer,
@@ -96,6 +97,7 @@ public:
     whl::vector<char> read(whl::string key, bool &found);
     whl::vector<char> read_part(whl::string key, size_t offset, size_t length,
                                 bool &found);
+    whl::vector<KVEntry> sample(size_t count);
     void debug_dump();
   };
 

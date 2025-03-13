@@ -2,6 +2,7 @@
 #include "big_value.h"
 #include "exception.h"
 #include "page_types.h"
+#include <cstdlib>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -165,7 +166,42 @@ DiskMap::get_entries_in_leaf(const LeafNodeStartPage *leaf) {
     ptr += sizeof(uint64_t);
     memcpy(entry.value.data_ptr(), ptr, value_length);
     ptr += value_length;
-    result.push_back(entry);
+    result.push_back(whl::move(entry));
+  }
+  return result;
+}
+
+whl::vector<KVEntry> DiskMap::sample(WAL::ROTransaction &t, size_t count) {
+  whl::vector<int64_t> pages;
+  whl::vector<KVEntry> result;
+  pages.push_back(set_msb(ROOT_PAGE, 1));
+  while (pages.size() > 0 && result.size() < count) {
+    size_t idx = rand() % pages.size();
+    int64_t page = pages[idx];
+    pages[idx] = pages.back();
+    pages.pop_back();
+    if (get_msb(page)) {
+      // Internal node
+      WAL::ROPageHandle<InternalNodePage> internal =
+          t.get_page<InternalNodePage>(clear_msb(page));
+      for (int i = 0; i < InternalNodePage::BRANCHING_FACTOR; i++) {
+        int64_t child = internal.ro_data()->entries[i];
+        if (child != 0) {
+          pages.push_back(child);
+        }
+      }
+    } else {
+      // Leaf node
+      WAL::ROPageHandle<LeafNodeStartPage> leaf =
+          t.get_page<LeafNodeStartPage>(clear_msb(page));
+      if (leaf.ro_data()->next == 0) {
+        whl::vector<KVEntry> entries = get_entries_in_leaf(leaf.ro_data());
+        for (size_t i = 0; i < entries.size() && result.size() < count; i++) {
+          result.push_back(whl::move(entries[i]));
+        }
+      }
+      // Sampling from big leaf nodes is not supported
+    }
   }
   return result;
 }
@@ -797,6 +833,10 @@ whl::vector<char> DiskMap::ROTransaction::read_part(whl::string key,
 
 whl::vector<char> DiskMap::ROTransaction::read(whl::string key, bool &found) {
   return dm->read(*tx, key, found);
+}
+
+whl::vector<KVEntry> DiskMap::ROTransaction::sample(size_t count) {
+  return dm->sample(*tx, count);
 }
 
 void DiskMap::ROTransaction::debug_dump() { dm->debug_dump(*tx); }
