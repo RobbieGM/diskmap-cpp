@@ -26,6 +26,7 @@ class BigValue {
     case LeafPageType::PURE:
       return 0;
     }
+    return 0;
   }
 
   size_t next_region_start(size_t region_start_page) {

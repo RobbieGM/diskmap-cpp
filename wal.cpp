@@ -46,12 +46,30 @@ static uint32_t checksum(const InMemoryWALRecord &record) {
 }
 
 static size_t get_unpadded_length(size_t length, const char *data) {
-  // Get number of bytes in data before the region of contiguous 0s at the end
-  for (size_t i = length; i-- > 0;) {
+  if (length == 0)
+    return 0;
+
+  // First check if we can skip any 8-byte zero chunks from the end
+  const size_t *size_data = reinterpret_cast<const size_t *>(data);
+  size_t num_size_t = length / sizeof(size_t);
+
+  // Skip 8-byte zero chunks from the end
+  size_t i = length;
+  while (i >= sizeof(size_t)) {
+    if (size_data[(i - 1) / sizeof(size_t)] != 0) {
+      break;
+    }
+    i -= sizeof(size_t);
+  }
+
+  // Now check remaining bytes one at a time
+  while (i > 0) {
+    --i;
     if (data[i] != 0) {
       return i + 1;
     }
   }
+
   return 0;
 }
 
@@ -133,29 +151,24 @@ InMemoryWALRecord WAL::create_compensation_record(InMemoryWALRecord &record) {
 }
 
 void WAL::flush() {
-  for (size_t i = unflushed_record_index; i < records.size(); ++i) {
-    auto &record = records[i];
-    // Write with invalid checksum first
-    uint32_t checksum = record.header.common_header.checksum;
-    record.header.common_header.checksum = 0;
-    ::pwrite(wal_fd, &record.header,
-             record_header_size(record.header.common_header.type),
-             static_cast<long>(log_pos));
-    ::pwrite(
-        wal_fd, record.data.data_ptr(), record.data.size(),
-        static_cast<long>(
-            log_pos + record_header_size(record.header.common_header.type)));
-
-    // Correct checksum later to validate the whole record atomically
-    record.header.common_header.checksum = checksum;
-    ::pwrite(wal_fd, &record.header.common_header.checksum, sizeof(uint32_t),
-             static_cast<long>(log_pos +
-                               reinterpret_cast<uint64_t>(
-                                   &record.header.common_header.checksum) -
-                               reinterpret_cast<uint64_t>(&record.header)));
-
-    log_pos += record_size(record.header);
+  size_t appended_bytes = 0;
+  for (size_t i = unflushed_record_index; i < records.size(); i++) {
+    appended_bytes += record_size(records[i].header);
   }
+  whl::vector<char> buffer(appended_bytes);
+  size_t offset = 0;
+  for (size_t i = unflushed_record_index; i < records.size(); i++) {
+    auto &record = records[i];
+    memcpy(buffer.data_ptr() + offset, &record.header,
+           record_header_size(record.header.common_header.type));
+    offset += record_header_size(record.header.common_header.type);
+    memcpy(buffer.data_ptr() + offset, record.data.data_ptr(),
+           record.data.size());
+    offset += record.data.size();
+  }
+  ::pwrite(wal_fd, buffer.data_ptr(), appended_bytes,
+           static_cast<long>(log_pos));
+  log_pos += appended_bytes;
   unflushed_record_index = records.size();
   sync_log();
 }

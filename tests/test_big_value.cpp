@@ -10,7 +10,7 @@ void pseudorandom_fill(char *data, size_t length) {
 
 void compare(const char *expected, const char *actual, size_t length,
              const char *name) {
-  for (size_t i = 0; i < length; i++) {
+  for (ssize_t i = 0; i < length; i++) {
     if (expected[i] != actual[i]) {
       printf("Mismatch at 0x%lx (%zu) in %s\n", i, i, name);
       printf("%02x (expected) != %02x (actual)\n",

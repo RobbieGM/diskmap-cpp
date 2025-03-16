@@ -50,7 +50,6 @@ struct WALHeader {
   WALCommonHeader common_header;
   union {
     SetRecord set;
-    // CopyRecord copy;
     CompensationRecord compensation;
   };
 } __attribute__((packed));

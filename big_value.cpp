@@ -15,7 +15,7 @@ void BigValue::rw_impl(size_t offset, char *buffer, size_t length,
                          // to the first byte of the value in the page
   // (value_offset_in_start_page for the first page, 8 for
   // continuation pages, 0 for pure pages)
-  int value_offset = 0;
+  size_t value_offset = 0;
   LeafPageType current_page_type = LeafPageType::START;
 
   // Continue skipping through 1) page regions, 2) pages, or 3) bytes, until the
