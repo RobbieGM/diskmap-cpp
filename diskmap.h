@@ -68,6 +68,8 @@ class DiskMap {
                      size_t length);
   void write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
              size_t length);
+  void write_part(WAL::RWTransaction &t, whl::string &key, size_t offset,
+                  const void *buffer, size_t length);
   void append(WAL::RWTransaction &t, whl::string &key, void *buffer,
               size_t length);
   bool remove(WAL::RWTransaction &t, whl::string &key);
@@ -110,6 +112,8 @@ public:
     void abort();
 
     void write(whl::string key, const void *buffer, size_t length);
+    void write_part(whl::string key, size_t offset, const void *buffer,
+                    size_t length);
     void append(whl::string key, void *buffer, size_t length);
     bool remove(whl::string key);
   };

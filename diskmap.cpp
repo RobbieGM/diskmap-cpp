@@ -522,16 +522,36 @@ void DiskMap::write_at_node(WAL::RWTransaction &t,
 
 void DiskMap::append(WAL::RWTransaction &t, whl::string &key, void *buffer,
                      size_t append_length) {
+  write_part(t, key, -1UL, buffer, append_length);
+}
+
+void DiskMap::write_part(WAL::RWTransaction &t, whl::string &key,
+                         size_t write_offset, const void *buffer,
+                         size_t write_length) {
   int parent_entry = 0;
   int parent_depth = 0;
   WAL::PageHandle<InternalNodePage> parent =
       find_parent(t, key, parent_entry, parent_depth);
   int64_t parent_entry_value = parent.ro_data()->entries[parent_entry];
 
+  auto key_not_found = [&]() {
+    const void *true_buffer = buffer;
+    if (write_offset == -1UL) {
+      write_offset = 0;
+    }
+    if (write_offset != 0) {
+      // Prepend 0s before offset
+      void *buf = alloca(write_offset + write_length);
+      memset(buf, 0, write_offset);
+      memcpy(reinterpret_cast<char *>(buf) + write_offset, buffer,
+             write_length);
+      true_buffer = buf;
+    }
+    write_at_node(t, whl::move(parent), parent_entry, parent_depth, key,
+                  true_buffer, write_length);
+  };
   if (parent_entry_value == 0) {
-    // Key doesn't exist
-    write_at_node(t, whl::move(parent), parent_entry, parent_depth, key, buffer,
-                  append_length);
+    key_not_found();
     return;
   }
   int64_t leaf_page_number = clear_msb(parent_entry_value);
@@ -540,9 +560,7 @@ void DiskMap::append(WAL::RWTransaction &t, whl::string &key, void *buffer,
 
   int entry_offset = find_entry_in_leaf(leaf.ro_data(), key);
   if (entry_offset == -1) {
-    // Key doesn't exist
-    write_at_node(t, whl::move(parent), parent_entry, parent_depth, key, buffer,
-                  append_length);
+    key_not_found();
     return;
   }
 
@@ -550,26 +568,32 @@ void DiskMap::append(WAL::RWTransaction &t, whl::string &key, void *buffer,
   int value_length_offset = entry_offset + key.size() + 1;
   uint64_t existing_length = *reinterpret_cast<const uint64_t *>(
       leaf.ro_data()->data + value_length_offset);
-  int offset = value_length_offset + sizeof(uint64_t);
+  if (write_offset == -1UL) {
+    write_offset = existing_length; // Append
+  }
+  int data_section_offset = value_length_offset + sizeof(uint64_t);
+  size_t new_value_length =
+      whl::max(existing_length, write_offset + write_length);
 
   if (leaf.ro_data()->entry_count == 1) {
     // Use big value approach
-    BigValue bv(&t, leaf.get_page(), offset);
-    bv.write(existing_length, static_cast<const char *>(buffer), append_length,
-             space_manager);
+    BigValue bv(&t, leaf.get_page(), data_section_offset);
+    bv.write(write_offset, static_cast<const char *>(buffer), write_length);
 
-    uint64_t new_value_length = existing_length + append_length;
-    char buffer[8];
-    memcpy(buffer, &new_value_length, 8);
-    leaf.write(&LeafNodeStartPage::data, value_length_offset, 8, buffer);
-    leaf.write(&LeafNodeStartPage::usage,
-               leaf.ro_data()->usage + append_length);
+    if (new_value_length != existing_length) {
+      char buffer[8];
+      memcpy(buffer, &new_value_length, 8);
+      leaf.write(&LeafNodeStartPage::data, value_length_offset, 8, buffer);
+      leaf.write(&LeafNodeStartPage::usage,
+                 leaf.ro_data()->usage + new_value_length -
+                     existing_length); // Length cannot decrease
+    }
   } else {
     // Read existing value, append, and rewrite
-    whl::vector<char> new_value(existing_length + append_length);
-    memcpy(new_value.data_ptr(), leaf.ro_data()->data + offset,
+    whl::vector<char> new_value(new_value_length);
+    memcpy(new_value.data_ptr(), leaf.ro_data()->data + data_section_offset,
            existing_length);
-    memcpy(new_value.data_ptr() + existing_length, buffer, append_length);
+    memcpy(new_value.data_ptr() + write_offset, buffer, write_length);
 
     write_at_node(t, whl::move(parent), parent_entry, parent_depth, key,
                   new_value.data_ptr(), new_value.size());
@@ -858,6 +882,12 @@ void DiskMap::RWTransaction::abort() {
 void DiskMap::RWTransaction::write(whl::string key, const void *buffer,
                                    size_t length) {
   dm->write(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key, buffer, length);
+}
+
+void DiskMap::RWTransaction::write_part(whl::string key, size_t offset,
+                                        const void *buffer, size_t length) {
+  dm->write_part(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key, offset,
+                 buffer, length);
 }
 
 void DiskMap::RWTransaction::append(whl::string key, void *buffer,
