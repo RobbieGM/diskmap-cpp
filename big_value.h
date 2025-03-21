@@ -41,8 +41,7 @@ class BigValue {
   // a given size (including key and value).
   static int required_continuation_regions(size_t entry_size);
 
-  void create_continuation_regions(size_t entry_size,
-                                   SpaceManager &space_manager);
+  void create_continuation_regions(size_t entry_size);
 
   void rw_impl(size_t offset, char *buffer, size_t length, bool is_write);
 
@@ -50,8 +49,7 @@ public:
   BigValue(WAL::ROTransaction *txn, uint64_t page, size_t offset)
       : txn(txn), start_page(page), value_offset_in_start_page(offset) {}
   void read(size_t offset, char *buffer, size_t length);
-  void write(size_t offset, const char *buffer, size_t length,
-             SpaceManager &space_manager);
+  void write(size_t offset, const char *buffer, size_t length);
 };
 
 } // namespace diskmap

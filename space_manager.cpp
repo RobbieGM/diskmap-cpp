@@ -5,8 +5,6 @@
 
 namespace diskmap {
 
-SpaceManager::SpaceManager() {}
-
 void SpaceManager::init(WAL::RWTransaction &t) {
   WAL::PageHandle<MetaPage> meta = t.get_page<MetaPage>(0);
   meta.write(&MetaPage::next_free_page, static_cast<int64_t>(MAX_ORDER + 3));

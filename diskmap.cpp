@@ -218,7 +218,7 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
   int64_t new_parent_entry = 0;
   if (total_entries_size <= LeafNodeStartPage::capacity()) {
     // Use one leaf node
-    int64_t new_leaf_page_number = space_manager.allocate(t, 0);
+    int64_t new_leaf_page_number = SpaceManager::allocate(t, 0);
     WAL::PageHandle<LeafNodeStartPage> new_leaf =
         t.get_page<LeafNodeStartPage>(new_leaf_page_number);
     new_leaf.write(&LeafNodeStartPage::usage, total_entries_size);
@@ -252,7 +252,7 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
     new_parent_entry = set_msb(new_leaf_page_number, 0);
   } else if (entries.size() == 1) {
     // Use one leaf node with linked list of continuation pages
-    int64_t new_leaf_start_page_number = space_manager.allocate(t, 0);
+    int64_t new_leaf_start_page_number = SpaceManager::allocate(t, 0);
     WAL::PageHandle<LeafNodeStartPage> new_leaf_start =
         t.get_page<LeafNodeStartPage>(new_leaf_start_page_number);
     new_leaf_start.write(&LeafNodeStartPage::usage, total_entries_size);
@@ -269,8 +269,7 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
     // Write value
     BigValue bv(&t, new_leaf_start_page_number,
                 entries[0].key.size() + 1 + sizeof(uint64_t));
-    bv.write(0, entries[0].value.data_ptr(), entries[0].value.size(),
-             space_manager);
+    bv.write(0, entries[0].value.data_ptr(), entries[0].value.size());
 
     new_parent_entry = set_msb(new_leaf_start_page_number, 0);
   } else {
@@ -282,7 +281,7 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
           .push_back(entries[i]);
     }
 
-    int64_t new_internal_node_page_number = space_manager.allocate(t, 0);
+    int64_t new_internal_node_page_number = SpaceManager::allocate(t, 0);
     WAL::PageHandle<InternalNodePage> new_internal_node =
         t.get_page<InternalNodePage>(new_internal_node_page_number);
     for (size_t i = 0; i < InternalNodePage::BRANCHING_FACTOR; i++) {
@@ -371,7 +370,7 @@ void DiskMap::free_leaf(WAL::RWTransaction &t, int64_t page_number) {
   int order = 0;
   while (true) {
     auto page = t.get_page<LeafNodeContinuationPage>(page_number);
-    space_manager.free(t, page_number, order++);
+    SpaceManager::free(t, page_number, order++);
     if (page.ro_data()->next == 0)
       break;
     page_number = page.ro_data()->next;
@@ -488,7 +487,7 @@ void DiskMap::write_at_node(WAL::RWTransaction &t,
         int existing_key_bucket = get_bucket(existing_key, parent_depth + 1);
         if (existing_key_bucket == new_bucket) {
           // Create another internal node
-          int64_t new_internal_page_number = space_manager.allocate(t, 0);
+          int64_t new_internal_page_number = SpaceManager::allocate(t, 0);
           WAL::PageHandle<InternalNodePage> new_internal =
               t.get_page<InternalNodePage>(new_internal_page_number);
           parent.write(&InternalNodePage::entries, new_bucket,
@@ -694,7 +693,7 @@ bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
                           sibling_entry_value);
 
         // Free the parent node
-        space_manager.free(t, parent.get_page(), 0);
+        SpaceManager::free(t, parent.get_page(), 0);
       }
     }
   } else {
