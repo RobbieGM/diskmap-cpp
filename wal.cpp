@@ -46,23 +46,7 @@ static uint32_t checksum(const InMemoryWALRecord &record) {
 }
 
 static size_t get_unpadded_length(size_t length, const char *data) {
-  if (length == 0)
-    return 0;
-
-  // First check if we can skip any 8-byte zero chunks from the end
-  const size_t *size_data = reinterpret_cast<const size_t *>(data);
-  size_t num_size_t = length / sizeof(size_t);
-
-  // Skip 8-byte zero chunks from the end
   size_t i = length;
-  while (i >= sizeof(size_t)) {
-    if (size_data[(i - 1) / sizeof(size_t)] != 0) {
-      break;
-    }
-    i -= sizeof(size_t);
-  }
-
-  // Now check remaining bytes one at a time
   while (i > 0) {
     --i;
     if (data[i] != 0) {
