@@ -221,7 +221,7 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
     int64_t new_leaf_page_number = SpaceManager::allocate(t, 0);
     WAL::PageHandle<LeafNodeStartPage> new_leaf =
         t.get_page<LeafNodeStartPage>(new_leaf_page_number);
-    new_leaf.write(&LeafNodeStartPage::usage, total_entries_size);
+    new_leaf.write(&LeafNodeStartPage::usage, static_cast<uint64_t>(total_entries_size));
     new_leaf.write(&LeafNodeStartPage::entry_count,
                    static_cast<uint16_t>(entries.size()));
 
@@ -255,7 +255,7 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
     int64_t new_leaf_start_page_number = SpaceManager::allocate(t, 0);
     WAL::PageHandle<LeafNodeStartPage> new_leaf_start =
         t.get_page<LeafNodeStartPage>(new_leaf_start_page_number);
-    new_leaf_start.write(&LeafNodeStartPage::usage, total_entries_size);
+    new_leaf_start.write(&LeafNodeStartPage::usage, static_cast<uint64_t>(total_entries_size));
     new_leaf_start.write(&LeafNodeStartPage::entry_count,
                          static_cast<uint16_t>(1));
 
@@ -573,7 +573,7 @@ void DiskMap::write_part(WAL::RWTransaction &t, whl::string &key,
   }
   int data_section_offset = value_length_offset + sizeof(uint64_t);
   size_t new_value_length =
-      whl::max(existing_length, write_offset + write_length);
+      whl::max(existing_length, static_cast<uint64_t>(write_offset + write_length));
 
   if (leaf.ro_data()->entry_count == 1) {
     // Use big value approach
@@ -632,7 +632,7 @@ whl::vector<char> DiskMap::read_part(WAL::ROTransaction &t, whl::string &key,
   int offset = entry_offset + key.size() + 1;
   uint64_t length =
       *reinterpret_cast<const uint64_t *>(leaf.ro_data()->data + offset);
-  read_length = whl::min(read_length, length - read_offset);
+  read_length = whl::min(read_length, static_cast<size_t>(length - read_offset));
   offset += sizeof(uint64_t);
 
   whl::vector<char> buffer(read_length);
