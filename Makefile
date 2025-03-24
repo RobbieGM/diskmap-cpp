@@ -43,7 +43,7 @@ clean:
 	rm -f $(OBJS) $(TARGET)
 
 # Install
-install:
+install: $(TARGET)
 	$(INSTALL_CMD)
 
 # Phony targets
