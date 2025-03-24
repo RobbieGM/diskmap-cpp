@@ -38,7 +38,7 @@ $(TARGET): $(OBJS)
 
 # Clean up
 clean:
-	$(test_CMD)
+	$(TEST_CMD)
 	rm -f *.o
 	rm -f $(OBJS) $(TARGET)
 
