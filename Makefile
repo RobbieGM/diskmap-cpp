@@ -1,6 +1,5 @@
 CXX = g++
-CXXFLAGS = -g -lwheel -std=c++17 -fPIC -Wall -Wextra -O0 -DDISABLE_ASYNC -fsanitize=address
-LDFLAGS = -shared
+
 
 # Detect platform
 UNAME_S := $(shell uname -s)
@@ -8,10 +7,14 @@ ifeq ($(UNAME_S), Linux)  # Linux
 	TEST_CMD = rm -f test_*
 	TARGET = libdiskmap.so
     INSTALL_CMD = cp libdiskmap.so /usr/local/lib/ && cp *.h /usr/local/include/ && ldconfig
+	CXXFLAGS = -g -lwheel -std=c++17 -fPIC -Wall -Wextra -O0 -DDISABLE_ASYNC -fsanitize=address
+	LDFLAGS = -shared
 else # macOS
 	TEST_CMD = rm -rf test_*/
 	TARGET = libdiskmap.dylib
     INSTALL_CMD = cp libdiskmap.dylib /usr/local/lib/ && cp *.h /usr/local/include/
+	CXXFLAGS = -g -std=c++17 -fPIC -Wall -Wextra -O0 -DDISABLE_ASYNC
+	LDFLAGS = -shared -L/usr/local/lib -lwheel -Wl,-rpath,/usr/local/lib
 endif
 
 # Source files
