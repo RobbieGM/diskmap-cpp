@@ -76,9 +76,9 @@ class WAL : AbstractWAL {
                                // updated when recovering
   bool checkpoint_pending = false;
   bool shutting_down = false;
-  whl::thread checkpointing_thread;
   whl::cv checkpoint_cv;
   whl::cv checkpoint_done;
+  whl::thread checkpointing_thread;
 
   InMemoryWALRecord load_wal_record(size_t offset) const;
   void apply_record(InMemoryWALRecord &record);
