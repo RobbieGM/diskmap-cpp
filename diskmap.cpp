@@ -838,7 +838,8 @@ void DiskMap::debug_dump_recursive(WAL::ROTransaction &t, int64_t page,
     // Ensure unused space is zeroed
     while (ptr < end_of(leaf.ro_data())) {
       if (*ptr != 0) {
-        printf("Leaf corrupted at %lx\n",
+        printf("Leaf corrupted at %lx (from data section: %lx)\n",
+               ptr - reinterpret_cast<const char *>(leaf.ro_data()),
                ptr - static_cast<const char *>(leaf.ro_data()->data));
         break;
       }
