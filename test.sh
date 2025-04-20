@@ -3,11 +3,12 @@ set -euo pipefail
 tests=$(ls tests/*.cpp)
 for t in $tests; do
     executable=$(basename $t .cpp)
+    printf "Test $executable... "
     ./$executable > tests/$executable.out
     if [ -f "./tests/$executable.out.correct" ]; then
         diff -u --color=auto tests/$executable.out tests/$executable.out.correct
-        printf "Test $executable passed!\n"
+        printf "passed!\n"
     else
-        printf "Test $executable has no .out.correct file, skipping\n"
+        printf "finished successfully but has no .out.correct file, skipping comparison\n"
     fi
 done
