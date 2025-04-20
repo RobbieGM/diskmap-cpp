@@ -120,8 +120,6 @@ void BigValue::create_continuation_regions(size_t entry_size) {
   auto &rw_txn = *dynamic_cast<WAL::RWTransaction *>(txn);
   WAL::PageHandle<LeafNodeStartPage> leaf_start =
       rw_txn.get_page<LeafNodeStartPage>(start_page);
-  leaf_start.write(&LeafNodeStartPage::usage,
-                   static_cast<uint64_t>(entry_size)); 
   leaf_start.write(&LeafNodeStartPage::entry_count, static_cast<uint16_t>(1));
   // Create linked list of continuation pages
   if (continuation_regions > 0) {
