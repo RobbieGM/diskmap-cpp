@@ -381,10 +381,6 @@ void DiskMap::free_leaf(WAL::RWTransaction &t, int64_t page_number) {
 
 void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
                     size_t length) {
-  if (key.size() == 0 || buffer == nullptr) {
-    throw DiskMapException("write: invalid input parameters");
-  }
-
   int parent_entry = 0;
   int parent_depth = 0;
   WAL::PageHandle<InternalNodePage> parent =
@@ -399,6 +395,9 @@ void DiskMap::write_at_node(WAL::RWTransaction &t,
                             int parent_entry, int parent_depth,
                             whl::string &key, const void *buffer,
                             size_t length) {
+  if (key.size() == 0 || key.size() > MAX_KEY_LENGTH || buffer == nullptr) {
+    throw DiskMapException("write: invalid input parameters");
+  }
   int64_t parent_entry_value = parent.ro_data()->entries[parent_entry];
   if (parent_entry_value == 0) {
     // Need to create subtree

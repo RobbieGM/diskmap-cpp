@@ -11,6 +11,7 @@ namespace diskmap {
 class DiskMap {
   static const char *MAGIC;
   static const int64_t ROOT_PAGE = 1;
+  static const size_t MAX_KEY_LENGTH = 2000;
   whl::unique_ptr<BufferPool> buffer_pool;
   whl::unique_ptr<WAL> wal_layer;
   whl::rw_mutex global_lock;
