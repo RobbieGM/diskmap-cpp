@@ -3,6 +3,7 @@
 *.dylib
 *.dm
 *.wal
+dump
 test_*
 test
 !test_*.out.correct
