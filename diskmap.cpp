@@ -227,28 +227,28 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
                    static_cast<uint16_t>(entries.size()));
 
     int offset = 0;
-    char entries_buffer[total_entries_size];
+    whl::vector<char> entries_buffer(total_entries_size);
     for (size_t i = 0; i < entries.size(); i++) {
       // Write key into entries_buffer
-      memcpy(entries_buffer + offset, entries[i].key.c_str(),
+      memcpy(entries_buffer.data_ptr() + offset, entries[i].key.c_str(),
              entries[i].key.size() + 1);
       offset += entries[i].key.size() + 1;
 
       // Write value length into entries_buffer
       uint64_t value_length = entries[i].value.size();
-      memcpy(entries_buffer + offset, &value_length, sizeof(uint64_t));
+      memcpy(entries_buffer.data_ptr() + offset, &value_length,
+             sizeof(uint64_t));
       offset += sizeof(uint64_t);
 
       // Write value into entries_buffer
-      memcpy(entries_buffer + offset, entries[i].value.data_ptr(),
+      memcpy(entries_buffer.data_ptr() + offset, entries[i].value.data_ptr(),
              entries[i].value.size());
       offset += entries[i].value.size();
     }
 
     // Write entries_buffer all at once
     new_leaf.write(&LeafNodeStartPage::data, 0, total_entries_size,
-                   entries_buffer);
-
+                   entries_buffer.data_ptr());
     // Replace parent entry with pointer to new leaf
     new_parent_entry = set_msb(new_leaf_page_number, 0);
   } else if (entries.size() == 1) {
@@ -342,8 +342,8 @@ void DiskMap::update_value_trivially(WAL::PageHandle<LeafNodeStartPage> &leaf,
   int update_start = value_length_offset;
   int update_end =
       leaf.ro_data()->usage + (growing ? length - current_value_length : 0);
-  char update_buffer[update_end - update_start];
-  memcpy(update_buffer, leaf.ro_data()->data + update_start,
+  whl::vector<char> update_buffer(update_end - update_start);
+  memcpy(update_buffer.data_ptr(), leaf.ro_data()->data + update_start,
          update_end - update_start);
 
   int next_entry_offset = value_offset + current_value_length;
@@ -351,20 +351,22 @@ void DiskMap::update_value_trivially(WAL::PageHandle<LeafNodeStartPage> &leaf,
   int bytes_to_move = leaf.ro_data()->usage - next_entry_offset;
   // Move subsequent entries left or right to be adjacent to reduced or expanded
   // size KV pair
-  memmove(update_buffer - update_start + new_next_entry_offset,
-          update_buffer - update_start + next_entry_offset, bytes_to_move);
+  memmove(update_buffer.data_ptr() - update_start + new_next_entry_offset,
+          update_buffer.data_ptr() - update_start + next_entry_offset,
+          bytes_to_move);
 
   // Set new value length
-  *reinterpret_cast<uint64_t *>(update_buffer - update_start +
+  *reinterpret_cast<uint64_t *>(update_buffer.data_ptr() - update_start +
                                 value_length_offset) = length;
 
   // Set new value
-  memcpy(update_buffer - update_start + value_offset, buffer, length);
+  memcpy(update_buffer.data_ptr() - update_start + value_offset, buffer,
+         length);
 
   leaf.write(&LeafNodeStartPage::usage,
              leaf.ro_data()->usage + length - current_value_length);
   leaf.write(&LeafNodeStartPage::data, update_start, update_end - update_start,
-             update_buffer);
+             update_buffer.data_ptr());
 }
 
 void DiskMap::free_leaf(WAL::RWTransaction &t, int64_t page_number) {
@@ -758,11 +760,11 @@ bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
     size_t bytes_to_move = leaf.ro_data()->usage - next_entry_offset;
 
     // Move bytes_to_move bytes from next_entry_offset left by entry_size
-    char write_buffer[bytes_to_move + entry_size];
-    memcpy(write_buffer, leaf.ro_data()->data + next_entry_offset,
+    whl::vector<char> write_buffer(bytes_to_move + entry_size);
+    memcpy(write_buffer.data_ptr(), leaf.ro_data()->data + next_entry_offset,
            bytes_to_move); // Leave last entry_size bytes at 0
-    leaf.write(&LeafNodeStartPage::data, entry_offset,
-               bytes_to_move + entry_size, write_buffer);
+    leaf.write(&LeafNodeStartPage::data, entry_offset, write_buffer.size(),
+               write_buffer.data_ptr());
 
     // Update usage and entry count
     leaf.write(&LeafNodeStartPage::usage, leaf.ro_data()->usage - entry_size);
