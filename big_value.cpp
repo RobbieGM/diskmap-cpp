@@ -114,21 +114,22 @@ int BigValue::required_continuation_regions(size_t entry_size) {
   return result;
 }
 
-void BigValue::create_continuation_regions(size_t entry_size) {
+void BigValue::create_continuation_regions(
+    size_t entry_size) { // TODO: only call when needed
   int continuation_regions =
       BigValue::required_continuation_regions(entry_size);
   auto &rw_txn = *dynamic_cast<WAL::RWTransaction *>(txn);
   WAL::PageHandle<LeafNodeStartPage> leaf_start =
       rw_txn.get_page<LeafNodeStartPage>(start_page);
-  leaf_start.write(&LeafNodeStartPage::entry_count, static_cast<uint16_t>(1));
   // Create linked list of continuation pages
   if (continuation_regions > 0) {
     int order = 1;
     int64_t continuation_page_number = leaf_start.ro_data()->next;
     if (continuation_page_number == 0) {
-      continuation_page_number = SpaceManager::allocate(rw_txn, order++);
+      continuation_page_number = SpaceManager::allocate(rw_txn, order);
       leaf_start.write(&LeafNodeStartPage::next, continuation_page_number);
     }
+    order++;
     WAL::PageHandle<LeafNodeContinuationPage> continuation_page =
         rw_txn.get_page<LeafNodeContinuationPage>(continuation_page_number);
     WAL::PageHandle<LeafNodeContinuationPage> prev =
@@ -137,8 +138,9 @@ void BigValue::create_continuation_regions(size_t entry_size) {
     while (continuation_regions > 0) {
       continuation_page_number = prev.ro_data()->next;
       if (continuation_page_number == 0) {
-        continuation_page_number = SpaceManager::allocate(rw_txn, order++);
+        continuation_page_number = SpaceManager::allocate(rw_txn, order);
         prev.write(&LeafNodeContinuationPage::next, continuation_page_number);
+        order++;
       }
       continuation_page =
           rw_txn.get_page<LeafNodeContinuationPage>(continuation_page_number);
