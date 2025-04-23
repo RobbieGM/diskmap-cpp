@@ -676,6 +676,8 @@ size_t DiskMap::read_value_length(WAL::ROTransaction &t, whl::string &key,
   int offset = entry_offset + key.size() + 1;
   uint64_t length =
       *reinterpret_cast<const uint64_t *>(leaf.ro_data()->data + offset);
+
+  found = true;
   return length;
 }
 
