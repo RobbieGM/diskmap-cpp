@@ -140,8 +140,8 @@ void BigValue::create_continuation_regions(
       if (continuation_page_number == 0) {
         continuation_page_number = SpaceManager::allocate(rw_txn, order);
         prev.write(&LeafNodeContinuationPage::next, continuation_page_number);
-        order++;
       }
+      order++;
       continuation_page =
           rw_txn.get_page<LeafNodeContinuationPage>(continuation_page_number);
       prev = whl::move(continuation_page);
