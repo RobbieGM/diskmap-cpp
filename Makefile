@@ -1,24 +1,23 @@
 CXX = g++
 
-
 # Detect platform
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S), Linux)  # Linux
 	TEST_CMD = rm -f test_*
 	TARGET = libdiskmap.so
     INSTALL_CMD = cp libdiskmap.so /usr/local/lib/ && cp *.h /usr/local/include/ && ldconfig
-	CXXFLAGS = -g -lwheel -std=c++17 -fPIC -Wall -Wextra -O2 -DDISABLE_ASYNC
+	CXXFLAGS = -g -lwheel -std=c++17 -fPIC -Wall -Wextra -O2
 	LDFLAGS = -shared
 else # macOS
 	TEST_CMD = rm -rf test_*/
 	TARGET = libdiskmap.dylib
     INSTALL_CMD = cp libdiskmap.dylib /usr/local/lib/ && cp *.h /usr/local/include/
-	CXXFLAGS = -g -std=c++17 -fPIC -Wall -Wextra -O2 -DDISABLE_ASYNC
+	CXXFLAGS = -g -std=c++17 -fPIC -Wall -Wextra -O2
 	LDFLAGS = -shared -L/usr/local/lib -lwheel -Wl,-rpath,/usr/local/lib
 endif
 
 # Source files
-SRCS = $(wildcard *.cpp)
+SRCS = $(filter-out dump.cpp, $(wildcard *.cpp))
 
 # Object files
 OBJS = $(SRCS:.cpp=.o)
