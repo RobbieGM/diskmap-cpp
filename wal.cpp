@@ -424,7 +424,7 @@ void WAL::checkpoint_periodically() {
   whl::mutex_guard _(&wal_mutex);
   while (true) {
     // Wait for some number of transactions to happen
-    while (transactions_since_last_checkpoint < 50 && !shutting_down) {
+    while (transactions_since_last_checkpoint < 5 && !shutting_down) {
       checkpoint_cv.wait(wal_mutex);
     }
     checkpoint_internal();
