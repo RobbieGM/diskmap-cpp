@@ -6,7 +6,7 @@ ifeq ($(UNAME_S), Linux)  # Linux
 	TEST_CMD = rm -f test_*
 	TARGET = libdiskmap.so
     INSTALL_CMD = cp libdiskmap.so /usr/local/lib/ && cp *.h /usr/local/include/ && ldconfig
-	CXXFLAGS = -g -std=c++17 -fPIC -Wall -Wextra -O1
+	CXXFLAGS = -g -std=c++17 -fPIC -Wall -Wextra -O2
 	LDFLAGS = -shared
 else # macOS
 	TEST_CMD = rm -rf test_*/
