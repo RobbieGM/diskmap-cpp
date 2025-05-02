@@ -53,7 +53,7 @@ void BigValue::rw_impl(size_t offset, char *buffer, size_t length,
     size_t distance = end_offset - value_offset;
     size_t page_skip =
         PAGE_SIZE - start_offset(current_page_type) - page_offset;
-    size_t length_in_page = whl::min(distance, page_skip);
+    size_t length_in_page = std::min(distance, page_skip);
     // Get page handle (not actually a MetaPage, actual offset calculated
     // later)
     // Read or write
@@ -133,7 +133,7 @@ void BigValue::create_continuation_regions(
     WAL::PageHandle<LeafNodeContinuationPage> continuation_page =
         rw_txn.get_page<LeafNodeContinuationPage>(continuation_page_number);
     WAL::PageHandle<LeafNodeContinuationPage> prev =
-        whl::move(continuation_page);
+        std::move(continuation_page);
     continuation_regions--;
     while (continuation_regions > 0) {
       continuation_page_number = prev.ro_data()->next;
@@ -144,7 +144,7 @@ void BigValue::create_continuation_regions(
       order++;
       continuation_page =
           rw_txn.get_page<LeafNodeContinuationPage>(continuation_page_number);
-      prev = whl::move(continuation_page);
+      prev = std::move(continuation_page);
       continuation_regions--;
     }
   }

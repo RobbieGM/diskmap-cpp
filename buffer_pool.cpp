@@ -1,6 +1,6 @@
 #include "buffer_pool.h"
+#include <mutex>
 #include <unistd.h>
-#include <wheel.h>
 
 namespace diskmap {
 
@@ -22,8 +22,8 @@ pool_index_t BufferPool::retain(file_index_t file_index, bool advise_eviction) {
   size_t evicted_page_lsn = -1;
   pool_index_t pool_index = -1;
   {
-    whl::mutex_guard _(&mutex);
-    if (!file_to_pool_index.contains(file_index)) {
+    std::lock_guard _(mutex);
+    if (file_to_pool_index.find(file_index) == file_to_pool_index.end()) {
       // Prepare to load this page from the disk to the buffer pool
       if (next_pool_index < pool_size) {
         // Use a free page
@@ -77,7 +77,7 @@ pool_index_t BufferPool::retain(file_index_t file_index, bool advise_eviction) {
 }
 
 void BufferPool::release(pool_index_t pool_index) {
-  whl::mutex_guard _(&mutex);
+  std::lock_guard _(mutex);
   if (metadata[pool_index].refcount <= 0) {
     throw BufferPoolException();
   }
@@ -95,8 +95,7 @@ BufferPool::PageHandle::~PageHandle() {
   if (pool_index != -1) {
     pool->release(pool_index);
   }
-  pool_index = -1; // Makes double destructor safe, so explicit destructor can
-                   // be used in tests
+  pool_index = -1;
 }
 
 BufferPool::PageHandle::PageHandle(PageHandle &&other) noexcept
@@ -119,7 +118,7 @@ char *BufferPool::PageHandle::data() { return pool->pages[pool_index].data; }
 void BufferPool::PageHandle::modified_by(size_t lsn) {
   pool->metadata[pool_index].dirty = true;
   pool->metadata[pool_index].page_lsn =
-      whl::max(lsn, pool->metadata[pool_index].page_lsn);
+      std::max(lsn, pool->metadata[pool_index].page_lsn);
 }
 
 BufferPool::PageHandle BufferPool::get_page(file_index_t file_index,
@@ -128,7 +127,7 @@ BufferPool::PageHandle BufferPool::get_page(file_index_t file_index,
 }
 
 void BufferPool::flush_all() {
-  whl::mutex_guard _(&mutex);
+  std::lock_guard _(mutex);
   for (pool_index_t i = 0; i < pool_size; i++) {
     if (metadata[i].dirty) {
       pwrite(fd, pages[i].data, PAGE_SIZE,

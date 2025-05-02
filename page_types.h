@@ -2,7 +2,8 @@
 
 #include <cstdint>
 #include <cstring>
-#include <wheel.h>
+#include <string>
+#include <vector>
 
 namespace diskmap {
 
@@ -77,11 +78,11 @@ inline const char *end_of(const void *page) {
 }
 
 struct KVEntry {
-  whl::string key;
-  whl::vector<char> value;
+  std::string key;
+  std::vector<char> value;
   KVEntry() = default;
-  KVEntry(const whl::string &key, whl::vector<char> &&value)
-      : key(key), value(whl::move(value)) {}
+  KVEntry(const std::string &key, std::vector<char> &&value)
+      : key(key), value(std::move(value)) {}
 };
 
 }; // namespace diskmap

@@ -1,16 +1,16 @@
 #pragma once
 
 #include <cstddef>
-#include <wheel.h>
+#include <unordered_map>
 
 namespace diskmap {
 
 // A least-recently-used replacement policy implementation.
 class LRUReplacer {
   struct Node {
-    Node() {}
-    Node(int val) : val(val) {}
-    int val;
+    Node() = default;
+    explicit Node(int val) : val(val) {}
+    int val{};
     Node *next = nullptr;
     Node *prev = nullptr;
   };
@@ -18,13 +18,17 @@ class LRUReplacer {
   Node *head;
   Node *tail;
   size_t size;
-  whl::unordered_map<int, Node *> map;
+  std::unordered_map<int, Node *> map;
 
-  bool contains(int val) { return map.contains(val); }
+  bool contains(int val) { return map.find(val) != map.end(); }
   friend class DualPriorityReplacer;
 
 public:
   LRUReplacer();
+  LRUReplacer(const LRUReplacer &) = delete;
+  LRUReplacer(LRUReplacer &&) = delete;
+  LRUReplacer &operator=(const LRUReplacer &) = delete;
+  LRUReplacer &operator=(LRUReplacer &&) = delete;
   ~LRUReplacer();
 
   void insert(int val);

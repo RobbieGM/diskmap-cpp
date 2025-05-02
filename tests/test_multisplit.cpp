@@ -6,10 +6,10 @@ int main() {
   // Page can hold 4096 - 11 = 4085 >= 3000 + 500 + 500
   const char b4000[4000]{};
   const char b500[500]{};
-  whl::string k0 = "ad";    // = [446, ...]
-  whl::string k1 = "ajos";  // = [446, 219, ...]
-  whl::string k2 = "dmUpw"; // = [446, 219, 384, ...]
-  whl::string k3 = "a";     // = [446, 219, 384, 400, ...]
+  std::string k0 = "ad";    // = [446, ...]
+  std::string k1 = "ajos";  // = [446, 219, ...]
+  std::string k2 = "dmUpw"; // = [446, 219, 384, ...]
+  std::string k3 = "a";     // = [446, 219, 384, 400, ...]
 
   {
     // Incremental multi split

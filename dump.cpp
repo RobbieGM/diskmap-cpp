@@ -7,13 +7,13 @@ int main(int argc, const char *argv[]) {
     return 1;
   }
 
-  whl::string path = argv[1];
+  std::string path = argv[1];
   diskmap::DiskMap db(path);
   auto txn = db.begin_ro_transaction();
   if (argc == 2) {
     txn.debug_dump();
   } else {
-    whl::string key = argv[2];
+    std::string key = argv[2];
     bool found{};
     auto value = txn.read(key, found);
     if (!found) {

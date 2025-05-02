@@ -62,7 +62,7 @@ int main() {
   auto actual_a = tx.read("a", found);
   assert(found);
   assert(actual_a.size() == 400);
-  compare(expected_a, actual_a.data_ptr(), sizeof(expected_a), "a");
+  compare(expected_a, actual_a.data(), sizeof(expected_a), "a");
 
   char expected_b[5000]{0};
   // Write 0-2999
@@ -74,7 +74,7 @@ int main() {
   auto b = tx.read("b", found);
   assert(found);
   assert(b.size() == 5000);
-  compare(expected_b, b.data_ptr(), sizeof(expected_b), "b");
+  compare(expected_b, b.data(), sizeof(expected_b), "b");
 
   tx.commit();
   return 0;

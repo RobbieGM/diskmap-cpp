@@ -11,7 +11,7 @@ void add_600() {
     for (int b = 0; b < 10; b++) {
       int i = (a * 10) + b;
       // NOLINTNEXTLINE(readability-redundant-string-cstr)
-      whl::string key = std::to_string(i).c_str();
+      std::string key = std::to_string(i).c_str();
       tx.write(key, value, sizeof(value));
     }
     tx.commit();
@@ -31,7 +31,7 @@ void remove_600() {
     for (int b = 0; b < 10; b++) {
       int i = (a * 10) + b;
       // NOLINTNEXTLINE(readability-redundant-string-cstr)
-      whl::string key = std::to_string(i).c_str();
+      std::string key = std::to_string(i).c_str();
       if (!tx.remove(key)) {
         printf("Warning: %d missing\n", i);
       }

@@ -4,7 +4,6 @@
 #include "space_manager.h"
 #include "wal.h"
 #include <functional>
-#include <wheel.h>
 
 namespace diskmap {
 

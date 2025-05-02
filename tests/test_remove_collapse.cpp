@@ -10,8 +10,8 @@ int main() {
   auto tx = map.begin_rw_transaction();
   const char long_value[3000]{};
 
-  whl::string k0 = "a";
-  whl::string k1 = "ad";
+  std::string k0 = "a";
+  std::string k1 = "ad";
   tx.write(k0, static_cast<const void *>(long_value), sizeof(long_value));
   tx.write(k1, static_cast<const void *>(long_value), sizeof(long_value));
 

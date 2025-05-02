@@ -3,6 +3,8 @@
 #include "page_types.h"
 #include "replacer.h"
 #include <cstdint>
+#include <mutex>
+#include <unordered_map>
 
 namespace diskmap {
 
@@ -70,14 +72,14 @@ class BufferPool {
   AbstractWAL *wal;
   // Index of the next free slot in the buffer pool, limited to POOL_SIZE - 1.
   pool_index_t next_pool_index = 0;
-  whl::vector<PageData> pages;
-  whl::vector<PageMetadata> metadata;
+  std::vector<PageData> pages;
+  std::vector<PageMetadata> metadata;
   // The replacer controls which not-in-use pages should be evicted.
   DualPriorityReplacer replacer;
   // A lookup table to find a page's index in the buffer pool by its index in
   // the data file.
-  whl::unordered_map<file_index_t, pool_index_t> file_to_pool_index;
-  whl::mutex mutex;
+  std::unordered_map<file_index_t, pool_index_t> file_to_pool_index;
+  std::mutex mutex;
 
   // Put a page from the file into the pool, if needed, and increment its
   // refcount

@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <cstdio>
 #include <fcntl.h>
+#include <memory>
 
 class MockWAL : public diskmap::AbstractWAL {
 public:
@@ -17,14 +18,14 @@ int main() {
   diskmap::BufferPool pool(fd, 2); // 2 page pool
   pool.set_wal(&wal);
 
-  auto p0 = pool.get_page(0);
-  p0.data()[0] = 'a';
-  p0.modified_by(0);
-  auto p1 = pool.get_page(1);
-  p1.data()[0] = 'b';
-  p1.modified_by(1);
+  auto p0 = std::make_unique<diskmap::BufferPool::PageHandle>(pool.get_page(0));
+  p0->data()[0] = 'a';
+  p0->modified_by(0);
+  auto p1 = std::make_unique<diskmap::BufferPool::PageHandle>(pool.get_page(1));
+  p1->data()[0] = 'b';
+  p1->modified_by(1);
   assert(wal.last_flushed_lsn == -1UL);
-  p0.diskmap::BufferPool::PageHandle::~PageHandle();
+  p0.reset();
   {
     auto p2 = pool.get_page(2);
     p2.data()[0] = 'c';

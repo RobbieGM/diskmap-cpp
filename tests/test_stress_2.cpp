@@ -1,6 +1,5 @@
 #include "../diskmap.h"
 #include <cassert>
-#include <iostream>
 
 void highVolumeReadWriteTest() {
   remove("test.dm");
@@ -12,18 +11,15 @@ void highVolumeReadWriteTest() {
 
   // Insert many entries
   for (int i = 0; i < NUM_ENTRIES; i++) {
-    std::string temp = "entry_" + std::to_string(i);
-    whl::string key(temp.c_str());
-    std::string temp2 = "value_" + std::to_string(i);
-    whl::string value(temp2.c_str());
+    std::string key = "entry_" + std::to_string(i);
+    std::string value = "value_" + std::to_string(i);
     tx.write(key, value.c_str(), value.size());
   }
 
   // Random Reads
   for (int i = 0; i < 100000; i++) {
     int randIndex = rand() % NUM_ENTRIES;
-    std::string temp = "entry_" + std::to_string(randIndex); // Use randIndex
-    whl::string key(temp.c_str());
+    std::string key = "entry_" + std::to_string(randIndex);
     bool found{};
     auto result = tx.read(key, found);
     assert(found);
@@ -44,17 +40,14 @@ void massiveDeletionTest() {
 
   // Insert values
   for (int i = 0; i < NUM_ENTRIES; i++) {
-    std::string temp = "delete_key" + std::to_string(i);
-    whl::string key(temp.c_str());
-    std::string temp2 = "delete_value" + std::to_string(i);
-    whl::string value(temp2.c_str());
+    std::string key = "delete_key" + std::to_string(i);
+    std::string value = "delete_value" + std::to_string(i);
     tx.write(key, value.c_str(), value.size());
   }
 
   // Delete half of the keys
   for (int i = 0; i < NUM_ENTRIES / 2; i++) {
-    std::string temp = "delete_key" + std::to_string(i);
-    whl::string key(temp.c_str());
+    std::string key = "delete_key" + std::to_string(i);
     bool success = tx.remove(key);
     assert(success);
   }
@@ -62,8 +55,7 @@ void massiveDeletionTest() {
   // Verify deletion
   bool found{};
   for (int i = 0; i < NUM_ENTRIES / 2; i++) {
-    std::string temp = "delete_key" + std::to_string(i);
-    whl::string key(temp.c_str());
+    std::string key = "delete_key" + std::to_string(i);
     auto result = tx.read(key, found);
     assert(!found); // Should be deleted
   }

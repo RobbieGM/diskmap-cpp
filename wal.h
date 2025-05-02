@@ -3,6 +3,8 @@
 #include "buffer_pool.h"
 #include "checksum.h"
 #include "exception.h"
+#include <condition_variable>
+#include <thread>
 
 namespace diskmap {
 
@@ -56,7 +58,7 @@ struct WALHeader {
 
 struct InMemoryWALRecord {
   WALHeader header;
-  whl::vector<char> data; // Any variable-length data
+  std::vector<char> data; // Any variable-length data
 };
 
 // A physical write-ahead logging layer, guaranteeing transaction atomicity and
@@ -66,9 +68,9 @@ class WAL : AbstractWAL {
   int wal_fd;
   uint32_t next_lsn = 0;
   uint32_t next_txn_id = 0;
-  whl::mutex wal_mutex;
+  std::mutex wal_mutex;
   size_t log_pos = 0;
-  whl::vector<InMemoryWALRecord> records;
+  std::vector<InMemoryWALRecord> records;
   size_t unflushed_record_index = 0; // Index into records of the first
                                      // unflushed record
   int transactions_since_last_checkpoint = 0;
@@ -76,16 +78,16 @@ class WAL : AbstractWAL {
                                // updated when recovering
   bool checkpoint_pending = false;
   bool shutting_down = false;
-  whl::cv checkpoint_cv;
-  whl::cv checkpoint_done;
-  whl::thread checkpointing_thread;
+  std::condition_variable checkpoint_cv;
+  std::condition_variable checkpoint_done;
+  std::thread checkpointing_thread;
 
   InMemoryWALRecord load_wal_record(size_t offset) const;
   void apply_record(InMemoryWALRecord &record);
   InMemoryWALRecord create_compensation_record(InMemoryWALRecord &record);
   void flush();
   void flush_up_to(size_t lsn) override;
-  void checkpoint_internal();
+  void checkpoint_internal(std::unique_lock<std::mutex> &wal_lock);
   static void *checkpointing_thread_func(void *arg);
   void recover();
   void sync_log() const;
@@ -100,7 +102,7 @@ class WAL : AbstractWAL {
   friend class PageHandle;
 
 public:
-  WAL(BufferPool *pool, const whl::string &wal_path);
+  WAL(BufferPool *pool, const std::string &wal_path);
   virtual ~WAL();
 
   // Delete move/copy constructors and assignment operators
@@ -217,12 +219,12 @@ public:
     RWTransaction(const RWTransaction &) = delete;
     RWTransaction &operator=(const RWTransaction &) = delete;
     RWTransaction(RWTransaction &&other) noexcept
-        : ROTransaction(whl::move(static_cast<ROTransaction &>(other))),
+        : ROTransaction(std::move(static_cast<ROTransaction &>(other))),
           txn_id(other.txn_id), state(other.state) {}
     RWTransaction &operator=(RWTransaction &&other) noexcept {
       if (this != &other) {
         ROTransaction::operator=(
-            whl::move(static_cast<ROTransaction &>(other)));
+            std::move(static_cast<ROTransaction &>(other)));
         txn_id = other.txn_id;
         state = other.state;
       }

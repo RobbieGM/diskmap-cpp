@@ -5,7 +5,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <unistd.h>
-#include <wheel.h>
+#include <unordered_set>
 
 namespace diskmap {
 
@@ -40,7 +40,7 @@ static uint32_t checksum(const InMemoryWALRecord &record) {
                 sizeof(record.header.common_header.checksum));
   // Digest variable-length data
   if (record.data.size() > 0) {
-    cs.digest(record.data.data_ptr(), record.data.size());
+    cs.digest(record.data.data(), record.data.size());
   }
   return cs.value();
 }
@@ -69,7 +69,7 @@ InMemoryWALRecord WAL::load_wal_record(size_t offset) const {
   InMemoryWALRecord result;
   result.header = header;
   result.data.resize(data_size);
-  ::pread(wal_fd, result.data.data_ptr(), data_size,
+  ::pread(wal_fd, result.data.data(), data_size,
           static_cast<long>(offset + header_size));
   return result;
 }
@@ -80,7 +80,7 @@ void WAL::apply_record(InMemoryWALRecord &record) {
         pool->get_page(record.header.compensation.loc / PAGE_SIZE, false);
     // Set new value
     memcpy(handle.data() + (record.header.compensation.loc % PAGE_SIZE),
-           record.data.data_ptr(), record.header.compensation.new_value_len);
+           record.data.data(), record.header.compensation.new_value_len);
     // Fill zeros after new value
     uint32_t zeros = record.header.compensation.length -
                      record.header.compensation.new_value_len;
@@ -122,7 +122,7 @@ InMemoryWALRecord WAL::create_compensation_record(InMemoryWALRecord &record) {
 
     result.data.resize(result.header.compensation.new_value_len);
     // Copy record old_value to compensation record data new_value
-    memcpy(result.data.data_ptr(), record.data.data_ptr(),
+    memcpy(result.data.data(), record.data.data(),
            result.header.compensation.new_value_len);
   } else {
     throw DiskMapException(
@@ -139,19 +139,17 @@ void WAL::flush() {
   for (size_t i = unflushed_record_index; i < records.size(); i++) {
     appended_bytes += record_size(records[i].header);
   }
-  whl::vector<char> buffer(appended_bytes);
+  std::vector<char> buffer(appended_bytes);
   size_t offset = 0;
   for (size_t i = unflushed_record_index; i < records.size(); i++) {
     auto &record = records[i];
-    memcpy(buffer.data_ptr() + offset, &record.header,
+    memcpy(buffer.data() + offset, &record.header,
            record_header_size(record.header.common_header.type));
     offset += record_header_size(record.header.common_header.type);
-    memcpy(buffer.data_ptr() + offset, record.data.data_ptr(),
-           record.data.size());
+    memcpy(buffer.data() + offset, record.data.data(), record.data.size());
     offset += record.data.size();
   }
-  ::pwrite(wal_fd, buffer.data_ptr(), appended_bytes,
-           static_cast<long>(log_pos));
+  ::pwrite(wal_fd, buffer.data(), appended_bytes, static_cast<long>(log_pos));
   log_pos += appended_bytes;
   unflushed_record_index = records.size();
   sync_log();
@@ -165,13 +163,13 @@ void WAL::flush_up_to(size_t lsn) {
   }
 }
 
-void WAL::checkpoint_internal() {
+void WAL::checkpoint_internal(std::unique_lock<std::mutex> &wal_lock) {
   // Prevent new transactions from beginning
   checkpoint_pending = true;
 
   // Wait for all transactions to end
   while (active_transactions > 0) {
-    checkpoint_cv.wait(wal_mutex);
+    checkpoint_cv.wait(wal_lock);
   }
 
   // Flush all data to disk
@@ -184,7 +182,7 @@ void WAL::checkpoint_internal() {
 
   // Allow transactions to begin again
   checkpoint_pending = false;
-  checkpoint_done.broadcast();
+  checkpoint_done.notify_all();
 }
 
 void WAL::recover() {
@@ -208,8 +206,8 @@ void WAL::recover() {
 
   // First pass: replay log and determine which transactions did not finish and
   // which LSNs have already been reverted
-  whl::unordered_set<uint64_t> finished_txns;
-  whl::unordered_set<uint64_t> reverted_lsns;
+  std::unordered_set<uint64_t> finished_txns;
+  std::unordered_set<uint64_t> reverted_lsns;
   for (size_t i = 0; i < records.size(); i++) {
     apply_record(records[i]);
     if (records[i].header.common_header.type == WALRecordType::COMMIT ||
@@ -219,21 +217,22 @@ void WAL::recover() {
     if (records[i].header.common_header.type == WALRecordType::CLR) {
       reverted_lsns.insert(records[i].header.compensation.undo_lsn);
     }
-    next_lsn = whl::max(next_lsn, records[i].header.common_header.lsn + 1);
+    next_lsn = std::max(next_lsn, records[i].header.common_header.lsn + 1);
     next_txn_id =
-        whl::max(next_txn_id, records[i].header.common_header.txn_id + 1);
+        std::max(next_txn_id, records[i].header.common_header.txn_id + 1);
   }
 
   // Second pass: find not-already-undone operations in order, and their
   // corresponding Txn IDs
-  whl::vector<size_t> to_undo_indices; // Indices into records to undo
-  whl::unordered_set<uint64_t>
+  std::vector<size_t> to_undo_indices; // Indices into records to undo
+  std::unordered_set<uint64_t>
       aborted_txns; // Txn IDs that need to finish aborting
   for (size_t i = 0; i < records.size(); i++) {
     InMemoryWALRecord &r = records[i];
     // If the record's transaction is unfinished, finish aborting it later and
     // undo the record if it's a SET
-    if (!finished_txns.contains(r.header.common_header.txn_id)) {
+    if (finished_txns.find(r.header.common_header.txn_id) ==
+        finished_txns.end()) {
       if (r.header.common_header.type == WALRecordType::SET) {
         to_undo_indices.push_back(i);
       }
@@ -250,7 +249,7 @@ void WAL::recover() {
   }
 
   // Write abort end records
-  aborted_txns.foreach ([&](uint64_t txn_id) {
+  for (auto txn_id : aborted_txns) {
     InMemoryWALRecord abort_end;
     abort_end.header.common_header.type = WALRecordType::ABORT_END;
     abort_end.header.common_header.lsn = next_lsn++;
@@ -258,7 +257,7 @@ void WAL::recover() {
     abort_end.header.common_header.checksum = checksum(abort_end);
     records.push_back(abort_end);
     apply_record(abort_end);
-  });
+  }
 }
 
 void WAL::sync_log() const {
@@ -273,9 +272,9 @@ void WAL::sync_log() const {
 // Functions for writing new log records (and modifying the database)
 
 uint32_t WAL::begin() {
-  whl::mutex_guard _(&wal_mutex);
+  std::unique_lock<std::mutex> wal_lock(wal_mutex);
   while (checkpoint_pending) {
-    checkpoint_done.wait(wal_mutex);
+    checkpoint_done.wait(wal_lock);
   }
   active_transactions++;
 
@@ -290,7 +289,7 @@ uint32_t WAL::begin() {
 }
 
 void WAL::commit(uint32_t txn_id) {
-  whl::mutex_guard _(&wal_mutex);
+  std::unique_lock<std::mutex> wal_lock(wal_mutex);
   InMemoryWALRecord new_record;
   new_record.header.common_header.type = WALRecordType::COMMIT;
   new_record.header.common_header.lsn = next_lsn++;
@@ -301,11 +300,11 @@ void WAL::commit(uint32_t txn_id) {
 
   flush();
   active_transactions--;
-  checkpoint_cv.broadcast();
+  checkpoint_cv.notify_all();
 }
 
 void WAL::abort(uint32_t txn_id) {
-  whl::mutex_guard _(&wal_mutex);
+  std::unique_lock<std::mutex> wal_lock(wal_mutex);
   InMemoryWALRecord abort_begin;
   abort_begin.header.common_header.type = WALRecordType::ABORT_BEGIN;
   abort_begin.header.common_header.lsn = next_lsn++;
@@ -325,7 +324,7 @@ void WAL::abort(uint32_t txn_id) {
   }
 
   // Find out what CLRs need to be made
-  whl::vector<size_t> to_undo_indices;
+  std::vector<size_t> to_undo_indices;
   for (size_t i = txn_begin_idx + 1; i < records.size(); i++) {
     InMemoryWALRecord &r = records[i];
     if (r.header.common_header.txn_id == txn_id) {
@@ -356,12 +355,12 @@ void WAL::abort(uint32_t txn_id) {
   apply_record(abort_end);
 
   active_transactions--;
-  checkpoint_cv.broadcast();
+  checkpoint_cv.notify_all();
 }
 
 void WAL::set(uint32_t txn_id, uint64_t loc, size_t data_length,
               size_t write_length, const char *data) {
-  whl::mutex_guard _(&wal_mutex);
+  std::unique_lock<std::mutex> wal_lock(wal_mutex);
   InMemoryWALRecord new_record;
   new_record.header.common_header.type = WALRecordType::SET;
   new_record.header.common_header.lsn = next_lsn++;
@@ -381,13 +380,13 @@ void WAL::set(uint32_t txn_id, uint64_t loc, size_t data_length,
 
   // Set data to old value + new value
   new_record.data.resize(from_length + data_length);
-  memcpy(new_record.data.data_ptr(), old_value, from_length);
-  memcpy(new_record.data.data_ptr() + from_length, data, data_length);
+  memcpy(new_record.data.data(), old_value, from_length);
+  memcpy(new_record.data.data() + from_length, data, data_length);
 
   new_record.header.common_header.checksum = checksum(new_record);
   apply_record(
       new_record); // Probably safe to apply first since we hold the lock.
-  records.push_back(whl::move(new_record));
+  records.push_back(std::move(new_record));
 }
 
 void *WAL::checkpointing_thread_func(void *arg) {
@@ -397,10 +396,10 @@ void *WAL::checkpointing_thread_func(void *arg) {
 
 // Public functions
 
-WAL::WAL(BufferPool *pool, const whl::string &wal_path)
+WAL::WAL(BufferPool *pool, const std::string &wal_path)
     : pool(pool), checkpointing_thread(checkpointing_thread_func, this) {
   pool->set_wal(this);
-  whl::mutex_guard _(&wal_mutex);
+  std::unique_lock<std::mutex> wal_lock(wal_mutex);
   // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer)
   wal_fd = open(wal_path.c_str(), O_RDWR | O_CREAT | O_EXCL, 0666);
   bool was_created = wal_fd > 0;
@@ -409,25 +408,25 @@ WAL::WAL(BufferPool *pool, const whl::string &wal_path)
     recover();
     // Checkpoint to reduce log file size, and because now is a good
     // opportunity
-    checkpoint_internal();
+    checkpoint_internal(wal_lock);
   }
 }
 
 WAL::~WAL() {
   shutting_down = true;
-  checkpoint_cv.broadcast();
+  checkpoint_cv.notify_all();
   checkpointing_thread.join();
   close(wal_fd);
 }
 
 void WAL::checkpoint_periodically() {
-  whl::mutex_guard _(&wal_mutex);
+  std::unique_lock<std::mutex> wal_lock(wal_mutex);
   while (true) {
     // Wait for some number of transactions to happen
     while (transactions_since_last_checkpoint < 5 && !shutting_down) {
-      checkpoint_cv.wait(wal_mutex);
+      checkpoint_cv.wait(wal_lock);
     }
-    checkpoint_internal();
+    checkpoint_internal(wal_lock);
     if (shutting_down)
       return;
     transactions_since_last_checkpoint = 0;
@@ -435,8 +434,8 @@ void WAL::checkpoint_periodically() {
 }
 
 void WAL::checkpoint() {
-  whl::mutex_guard _(&wal_mutex);
-  checkpoint_internal();
+  std::unique_lock<std::mutex> wal_lock(wal_mutex);
+  checkpoint_internal(wal_lock);
 }
 
 WAL::ROTransaction WAL::begin_ro_transaction() { return ROTransaction(this); }

@@ -11,7 +11,7 @@ int main() {
   auto tx = map.begin_rw_transaction();
   for (int i = 0; i < 600; i++) {
     // NOLINTNEXTLINE(readability-redundant-string-cstr)
-    whl::string key = std::to_string(i).c_str();
+    std::string key = std::to_string(i).c_str();
     tx.write(key, value, sizeof(value));
   }
   tx.commit();

@@ -2,11 +2,7 @@
 
 namespace diskmap {
 
-LRUReplacer::LRUReplacer() {
-  head = nullptr;
-  tail = nullptr;
-  size = 0;
-}
+LRUReplacer::LRUReplacer() : head(nullptr), tail(nullptr), size(0) {}
 
 LRUReplacer::~LRUReplacer() {
   while (head != nullptr) {
@@ -17,7 +13,7 @@ LRUReplacer::~LRUReplacer() {
 }
 
 void LRUReplacer::insert(int val) {
-  if (!map.contains(val)) {
+  if (map.find(val) == map.end()) {
     Node *node = new Node(val);
     map[val] = node;
     if (head == nullptr) {
@@ -49,11 +45,11 @@ void LRUReplacer::insert(int val) {
 }
 
 bool LRUReplacer::remove(int val) {
-  Node **result = map.find(val);
-  if (result == nullptr) {
+  auto result = map.find(val);
+  if (result == map.end()) {
     return false;
   }
-  Node *node = *result;
+  Node *node = result->second;
   if (node == head && node == tail) {
     head = nullptr;
     tail = nullptr;

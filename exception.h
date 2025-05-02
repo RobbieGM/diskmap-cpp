@@ -1,16 +1,16 @@
 #pragma once
 
-#include "wheel.h"
+#include <string>
 
 namespace diskmap {
 
 class DiskMapException {
 public:
-  explicit DiskMapException(const char *message) : message_(message) {}
-  const char *what() const noexcept { return message_.c_str(); }
+  explicit DiskMapException(const std::string &message) : msg(message) {}
+  const char *what() const noexcept { return msg.c_str(); }
 
 private:
-  whl::string message_;
+  std::string msg;
 };
 
 } // namespace diskmap

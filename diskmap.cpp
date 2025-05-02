@@ -1,17 +1,16 @@
 #include "diskmap.h"
 #include "big_value.h"
 #include "exception.h"
+#include "fnv_hash.h"
 #include "page_types.h"
-#include <cstdlib>
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <unistd.h>
 
 namespace diskmap {
 
 const char *DiskMap::MAGIC = "DISKMAP";
 
-DiskMap::DiskMap(const whl::string &path) {
+DiskMap::DiskMap(const std::string &path) {
   int fd = open(path.c_str(), O_RDWR | O_CREAT | O_EXCL, 0666);
   bool was_created = fd > 0;
   if (!was_created) {
@@ -20,8 +19,8 @@ DiskMap::DiskMap(const whl::string &path) {
   if (fd < 0) {
     throw DiskMapException("Failed to open file");
   }
-  buffer_pool = new BufferPool(fd);
-  wal_layer = new WAL(buffer_pool.get(), path + ".wal");
+  buffer_pool = std::make_unique<BufferPool>(fd);
+  wal_layer = std::make_unique<WAL>(buffer_pool.get(), path + ".wal");
 
   if (was_created) {
     WAL::RWTransaction tx = wal_layer->begin_rw_transaction();
@@ -62,26 +61,86 @@ static int64_t get_msb(int64_t val) { return val >> 63; }
 
 static int64_t clear_msb(int64_t val) { return val & ~(1LL << 63); }
 
-int DiskMap::get_bucket(whl::string &key, int depth) {
+int DiskMap::get_bucket(const std::string &key, int depth) {
   depth--; // For consistency with fnv_collide.py assuming depth starts at 0
   static int SPLITS_PER_HASH = 8; // = ceil(64 / 9) where 9 = log2(512)
   int hash_function = depth / SPLITS_PER_HASH;
-  whl::string *hash_key = &key;
-  whl::string alt_key;
+  const std::string *hash_key = &key;
+  std::string alt_key;
   if (hash_function > 0) {
     // Must prepend from the beginning since hashes that collide already cannot
     // be made different by appending characters to the end
-    alt_key += static_cast<char>('0' + hash_function);
-    alt_key += key;
+    alt_key = static_cast<char>('0' + hash_function) + key;
     hash_key = &alt_key;
   }
-  uint64_t hash = hash_key->hash();
+  uint64_t hash = fnv_hash(*hash_key);
   return get_bucket(hash, depth);
 }
 
+static void validate_leaf_integrity(const LeafNodeStartPage *leaf) {
+  const char *ptr = static_cast<const char *>(leaf->data);
+  int entry_count = 0;
+  while (ptr < end_of(leaf)) {
+    if (*ptr == '\0') {
+      break;
+    }
+    // Check key does not overrun
+    size_t max_key_len = end_of(leaf) - ptr;
+    size_t key_len = strnlen(ptr, max_key_len);
+    if (key_len == max_key_len) {
+      throw DiskMapException("Leaf corruption: key overruns page boundary");
+    }
+    ptr += key_len + 1;
+    if (ptr + sizeof(uint64_t) > end_of(leaf)) {
+      throw DiskMapException(
+          "Leaf corruption: value_length field overruns page boundary");
+    }
+    uint64_t value_length = *reinterpret_cast<const uint64_t *>(ptr);
+    ptr += sizeof(uint64_t);
+    // if (ptr + value_length > end_of(leaf)) {
+    //   throw DiskMapException("Leaf corruption: value overruns page
+    //   boundary");
+    // }
+    ptr += value_length;
+    entry_count++;
+  }
+  // Unused space must be zeroed
+  while (ptr < end_of(leaf)) {
+    if (*ptr != 0) {
+      throw DiskMapException("Leaf corruption: unused space not zeroed");
+    }
+    ptr++;
+  }
+  if (leaf->entry_count != entry_count) {
+    throw DiskMapException("Leaf corruption: entry_count mismatch");
+  }
+}
+
+void DiskMap::verify_integrity(WAL::ROTransaction &t) {
+  verify_integrity_recursive(t, set_msb(ROOT_PAGE, 1), -1);
+}
+
+void DiskMap::verify_integrity_recursive(WAL::ROTransaction &t, int64_t page,
+                                         int parent_index) {
+  if (get_msb(page)) {
+    int64_t actual_page = clear_msb(page);
+    WAL::ROPageHandle<InternalNodePage> node =
+        t.get_page<InternalNodePage>(actual_page);
+    for (int i = 0; i < InternalNodePage::BRANCHING_FACTOR; i++) {
+      if (node.ro_data()->entries[i] != 0) {
+        verify_integrity_recursive(t, node.ro_data()->entries[i], i);
+      }
+    }
+  } else {
+    WAL::ROPageHandle<LeafNodeStartPage> leaf =
+        t.get_page<LeafNodeStartPage>(page);
+    validate_leaf_integrity(leaf.ro_data());
+  }
+}
+
 template <typename Transaction>
-auto DiskMap::find_parent(Transaction &t, whl::string &key, int &parent_entry,
-                          int &parent_depth) {
+auto DiskMap::find_parent(Transaction &t, const std::string &key,
+                          int &parent_entry, int &parent_depth) {
   auto parent = t.template get_page<InternalNodePage>(ROOT_PAGE);
   parent_depth = 0;
   parent_entry = 0;
@@ -102,11 +161,11 @@ auto DiskMap::find_parent(Transaction &t, whl::string &key, int &parent_entry,
 
 // Explicit template instantiations for find_parent
 template auto DiskMap::find_parent<WAL::RWTransaction>(WAL::RWTransaction &t,
-                                                       whl::string &key,
+                                                       const std::string &key,
                                                        int &parent_entry,
                                                        int &parent_depth);
 template auto DiskMap::find_parent<WAL::ROTransaction>(WAL::ROTransaction &t,
-                                                       whl::string &key,
+                                                       const std::string &key,
                                                        int &parent_entry,
                                                        int &parent_depth);
 
@@ -125,7 +184,7 @@ int DiskMap::get_bucket(uint64_t hash, int depth) {
 }
 
 int DiskMap::find_entry_in_leaf(const LeafNodeStartPage *leaf,
-                                const whl::string &key) {
+                                const std::string &key) {
   const char *start = static_cast<const char *>(leaf->data);
   const char *ptr = start;
 
@@ -148,9 +207,9 @@ int DiskMap::find_entry_in_leaf(const LeafNodeStartPage *leaf,
   return -1;
 }
 
-whl::vector<KVEntry>
+std::vector<KVEntry>
 DiskMap::get_entries_in_leaf(const LeafNodeStartPage *leaf) {
-  whl::vector<KVEntry> result;
+  std::vector<KVEntry> result;
   const char *ptr = static_cast<const char *>(leaf->data);
 
   while (ptr < end_of(leaf)) {
@@ -164,16 +223,16 @@ DiskMap::get_entries_in_leaf(const LeafNodeStartPage *leaf) {
     uint64_t value_length = *reinterpret_cast<const uint64_t *>(ptr);
     entry.value.resize(value_length);
     ptr += sizeof(uint64_t);
-    memcpy(entry.value.data_ptr(), ptr, value_length);
+    memcpy(entry.value.data(), ptr, value_length);
     ptr += value_length;
-    result.push_back(whl::move(entry));
+    result.push_back(std::move(entry));
   }
   return result;
 }
 
-whl::vector<KVEntry> DiskMap::sample(WAL::ROTransaction &t, size_t count) {
-  whl::vector<int64_t> pages;
-  whl::vector<KVEntry> result;
+std::vector<KVEntry> DiskMap::sample(WAL::ROTransaction &t, size_t count) {
+  std::vector<int64_t> pages;
+  std::vector<KVEntry> result;
   pages.push_back(set_msb(ROOT_PAGE, 1));
   while (pages.size() > 0 && result.size() < count) {
     size_t idx = rand() % pages.size();
@@ -195,9 +254,9 @@ whl::vector<KVEntry> DiskMap::sample(WAL::ROTransaction &t, size_t count) {
       WAL::ROPageHandle<LeafNodeStartPage> leaf =
           t.get_page<LeafNodeStartPage>(clear_msb(page));
       if (leaf.ro_data()->next == 0) {
-        whl::vector<KVEntry> entries = get_entries_in_leaf(leaf.ro_data());
+        std::vector<KVEntry> entries = get_entries_in_leaf(leaf.ro_data());
         for (size_t i = 0; i < entries.size() && result.size() < count; i++) {
-          result.push_back(whl::move(entries[i]));
+          result.push_back(std::move(entries[i]));
         }
       }
       // Sampling from big leaf nodes is not supported
@@ -209,7 +268,7 @@ whl::vector<KVEntry> DiskMap::sample(WAL::ROTransaction &t, size_t count) {
 void DiskMap::create_subtree(WAL::RWTransaction &t,
                              WAL::PageHandle<InternalNodePage> &parent,
                              int parent_entry, int parent_depth,
-                             const whl::vector<KVEntry> &entries) {
+                             const std::vector<KVEntry> &entries) {
   size_t total_entries_size = 0;
   for (size_t i = 0; i < entries.size(); i++) {
     total_entries_size +=
@@ -227,28 +286,27 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
                    static_cast<uint16_t>(entries.size()));
 
     int offset = 0;
-    whl::vector<char> entries_buffer(total_entries_size);
+    std::vector<char> entries_buffer(total_entries_size);
     for (size_t i = 0; i < entries.size(); i++) {
       // Write key into entries_buffer
-      memcpy(entries_buffer.data_ptr() + offset, entries[i].key.c_str(),
+      memcpy(entries_buffer.data() + offset, entries[i].key.c_str(),
              entries[i].key.size() + 1);
       offset += entries[i].key.size() + 1;
 
       // Write value length into entries_buffer
       uint64_t value_length = entries[i].value.size();
-      memcpy(entries_buffer.data_ptr() + offset, &value_length,
-             sizeof(uint64_t));
+      memcpy(entries_buffer.data() + offset, &value_length, sizeof(uint64_t));
       offset += sizeof(uint64_t);
 
       // Write value into entries_buffer
-      memcpy(entries_buffer.data_ptr() + offset, entries[i].value.data_ptr(),
+      memcpy(entries_buffer.data() + offset, entries[i].value.data(),
              entries[i].value.size());
       offset += entries[i].value.size();
     }
 
     // Write entries_buffer all at once
     new_leaf.write(&LeafNodeStartPage::data, 0, total_entries_size,
-                   entries_buffer.data_ptr());
+                   entries_buffer.data());
     // Replace parent entry with pointer to new leaf
     new_parent_entry = set_msb(new_leaf_page_number, 0);
   } else if (entries.size() == 1) {
@@ -271,15 +329,15 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
     // Write value
     BigValue bv(&t, new_leaf_start_page_number,
                 entries[0].key.size() + 1 + sizeof(uint64_t));
-    bv.write(0, entries[0].value.data_ptr(), entries[0].value.size());
+    bv.write(0, entries[0].value.data(), entries[0].value.size());
 
     new_parent_entry = set_msb(new_leaf_start_page_number, 0);
   } else {
     // If entries cannot fit in a leaf and there is more than one, create
     // internal node
-    whl::vector<KVEntry> entries_by_hash[InternalNodePage::BRANCHING_FACTOR];
+    std::vector<KVEntry> entries_by_hash[InternalNodePage::BRANCHING_FACTOR];
     for (size_t i = 0; i < entries.size(); i++) {
-      entries_by_hash[get_bucket(entries[i].key.hash(), parent_depth + 1)]
+      entries_by_hash[get_bucket(fnv_hash(entries[i].key), parent_depth + 1)]
           .push_back(entries[i]);
     }
 
@@ -314,7 +372,7 @@ void DiskMap::create_subtree(WAL::RWTransaction &t,
 }
 
 void DiskMap::update_value_trivially(WAL::PageHandle<LeafNodeStartPage> &leaf,
-                                     int entry_offset, const whl::string &key,
+                                     int entry_offset, const std::string &key,
                                      const void *buffer, size_t length) {
   int value_length_offset = entry_offset + key.size() + 1;
   uint64_t current_value_length = *reinterpret_cast<const uint64_t *>(
@@ -342,8 +400,8 @@ void DiskMap::update_value_trivially(WAL::PageHandle<LeafNodeStartPage> &leaf,
   int update_start = value_length_offset;
   int update_end =
       leaf.ro_data()->usage + (growing ? length - current_value_length : 0);
-  whl::vector<char> update_buffer(update_end - update_start);
-  memcpy(update_buffer.data_ptr(), leaf.ro_data()->data + update_start,
+  std::vector<char> update_buffer(update_end - update_start);
+  memcpy(update_buffer.data(), leaf.ro_data()->data + update_start,
          update_end - update_start);
 
   int next_entry_offset = value_offset + current_value_length;
@@ -351,22 +409,21 @@ void DiskMap::update_value_trivially(WAL::PageHandle<LeafNodeStartPage> &leaf,
   int bytes_to_move = leaf.ro_data()->usage - next_entry_offset;
   // Move subsequent entries left or right to be adjacent to reduced or expanded
   // size KV pair
-  memmove(update_buffer.data_ptr() - update_start + new_next_entry_offset,
-          update_buffer.data_ptr() - update_start + next_entry_offset,
+  memmove(update_buffer.data() - update_start + new_next_entry_offset,
+          update_buffer.data() - update_start + next_entry_offset,
           bytes_to_move);
 
   // Set new value length
-  *reinterpret_cast<uint64_t *>(update_buffer.data_ptr() - update_start +
+  *reinterpret_cast<uint64_t *>(update_buffer.data() - update_start +
                                 value_length_offset) = length;
 
   // Set new value
-  memcpy(update_buffer.data_ptr() - update_start + value_offset, buffer,
-         length);
+  memcpy(update_buffer.data() - update_start + value_offset, buffer, length);
 
   leaf.write(&LeafNodeStartPage::usage,
              leaf.ro_data()->usage + length - current_value_length);
   leaf.write(&LeafNodeStartPage::data, update_start, update_end - update_start,
-             update_buffer.data_ptr());
+             update_buffer.data());
 }
 
 void DiskMap::free_leaf(WAL::RWTransaction &t, int64_t page_number) {
@@ -381,21 +438,22 @@ void DiskMap::free_leaf(WAL::RWTransaction &t, int64_t page_number) {
   }
 }
 
-void DiskMap::write(WAL::RWTransaction &t, whl::string &key, const void *buffer,
-                    size_t length) {
+void DiskMap::write(WAL::RWTransaction &t, const std::string &key,
+                    const void *buffer, size_t length) {
+  op_count++;
   int parent_entry = 0;
   int parent_depth = 0;
   WAL::PageHandle<InternalNodePage> parent =
       find_parent(t, key, parent_entry, parent_depth);
 
-  write_at_node(t, whl::move(parent), parent_entry, parent_depth, key, buffer,
+  write_at_node(t, std::move(parent), parent_entry, parent_depth, key, buffer,
                 length);
 }
 
 void DiskMap::write_at_node(WAL::RWTransaction &t,
                             WAL::PageHandle<InternalNodePage> parent,
                             int parent_entry, int parent_depth,
-                            whl::string &key, const void *buffer,
+                            const std::string &key, const void *buffer,
                             size_t length) {
   if (key.size() == 0 || key.size() > MAX_KEY_LENGTH || buffer == nullptr) {
     throw DiskMapException("write: invalid input parameters");
@@ -403,9 +461,10 @@ void DiskMap::write_at_node(WAL::RWTransaction &t,
   int64_t parent_entry_value = parent.ro_data()->entries[parent_entry];
   if (parent_entry_value == 0) {
     // Need to create subtree
-    whl::vector<KVEntry> entries;
+    std::vector<KVEntry> entries;
     entries.push_back(KVEntry(
-        key, whl::vector<char>(static_cast<const char *>(buffer), length)));
+        key, std::vector<char>(static_cast<const char *>(buffer),
+                               static_cast<const char *>(buffer) + length)));
     create_subtree(t, parent, parent_entry, parent_depth, entries);
     auto meta = t.get_page<MetaPage>(0);
     meta.write(&MetaPage::kv_entry_count, meta.ro_data()->kv_entry_count + 1);
@@ -435,7 +494,7 @@ void DiskMap::write_at_node(WAL::RWTransaction &t,
       for (size_t i = 0; i < entries.size(); i++) {
         if (entries[i].key == key) {
           entries[i].value.resize(length);
-          memcpy(entries[i].value.data_ptr(), buffer, length);
+          memcpy(entries[i].value.data(), buffer, length);
           break;
         }
       }
@@ -483,7 +542,7 @@ void DiskMap::write_at_node(WAL::RWTransaction &t,
     if (leaf.ro_data()->entry_count == 1) {
       // Create new internal node(s) pointing to original leaf and a new leaf
       // containing the new key-value pair.
-      whl::string existing_key = get_entries_in_leaf(leaf.ro_data())[0].key;
+      std::string existing_key = get_entries_in_leaf(leaf.ro_data())[0].key;
       // Keep creating internal nodes until the buckets don't collide anymore
       while (true) {
         int new_bucket = get_bucket(key, parent_depth + 1);
@@ -495,7 +554,7 @@ void DiskMap::write_at_node(WAL::RWTransaction &t,
               t.get_page<InternalNodePage>(new_internal_page_number);
           parent.write(&InternalNodePage::entries, new_bucket,
                        set_msb(new_internal_page_number, 1));
-          parent = whl::move(new_internal);
+          parent = std::move(new_internal);
           parent_depth++;
         } else {
           // Link parent to existing leaf
@@ -503,10 +562,11 @@ void DiskMap::write_at_node(WAL::RWTransaction &t,
                        set_msb(leaf_page_number, 0));
 
           // Create new leaf
-          whl::vector<KVEntry> new_entries;
-          new_entries.push_back(
-              KVEntry(key, whl::vector<char>(static_cast<const char *>(buffer),
-                                             length)));
+          std::vector<KVEntry> new_entries;
+          new_entries.push_back(KVEntry(
+              key,
+              std::vector<char>(static_cast<const char *>(buffer),
+                                static_cast<const char *>(buffer) + length)));
           create_subtree(t, parent, new_bucket, parent_depth, new_entries);
           break;
         }
@@ -514,23 +574,24 @@ void DiskMap::write_at_node(WAL::RWTransaction &t,
     } else {
       // Rebuild tree
       auto entries = get_entries_in_leaf(leaf.ro_data());
-      entries.push_back({key, whl::vector<char>(length)});
+      entries.push_back({key, std::vector<char>(length)});
       entries.back().value.resize(length);
-      memcpy(entries.back().value.data_ptr(), buffer, length);
+      memcpy(entries.back().value.data(), buffer, length);
 
       create_subtree(t, parent, parent_entry, parent_depth, entries);
     }
   }
 }
 
-void DiskMap::append(WAL::RWTransaction &t, whl::string &key, void *buffer,
-                     size_t append_length) {
-  write_part(t, key, -1UL, buffer, append_length);
+void DiskMap::append(WAL::RWTransaction &t, const std::string &key,
+                     void *buffer, size_t length) {
+  write_part(t, key, -1UL, buffer, length);
 }
 
-void DiskMap::write_part(WAL::RWTransaction &t, whl::string &key,
+void DiskMap::write_part(WAL::RWTransaction &t, const std::string &key,
                          size_t write_offset, const void *buffer,
                          size_t write_length) {
+  op_count++;
   int parent_entry = 0;
   int parent_depth = 0;
   WAL::PageHandle<InternalNodePage> parent =
@@ -550,7 +611,7 @@ void DiskMap::write_part(WAL::RWTransaction &t, whl::string &key,
              write_length);
       true_buffer = buf;
     }
-    write_at_node(t, whl::move(parent), parent_entry, parent_depth, key,
+    write_at_node(t, std::move(parent), parent_entry, parent_depth, key,
                   true_buffer, write_length);
   };
   if (parent_entry_value == 0) {
@@ -575,7 +636,7 @@ void DiskMap::write_part(WAL::RWTransaction &t, whl::string &key,
     write_offset = existing_length; // Append
   }
   int data_section_offset = value_length_offset + sizeof(uint64_t);
-  size_t new_value_length = whl::max(
+  size_t new_value_length = std::max(
       existing_length, static_cast<uint64_t>(write_offset + write_length));
 
   if (leaf.ro_data()->entry_count == 1) {
@@ -593,26 +654,26 @@ void DiskMap::write_part(WAL::RWTransaction &t, whl::string &key,
     }
   } else {
     // Read existing value, append, and rewrite
-    whl::vector<char> new_value(new_value_length);
-    memcpy(new_value.data_ptr(), leaf.ro_data()->data + data_section_offset,
+    std::vector<char> new_value(new_value_length);
+    memcpy(new_value.data(), leaf.ro_data()->data + data_section_offset,
            existing_length);
-    memcpy(new_value.data_ptr() + write_offset, buffer, write_length);
+    memcpy(new_value.data() + write_offset, buffer, write_length);
 
-    write_at_node(t, whl::move(parent), parent_entry, parent_depth, key,
-                  new_value.data_ptr(), new_value.size());
+    write_at_node(t, std::move(parent), parent_entry, parent_depth, key,
+                  new_value.data(), new_value.size());
   }
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-whl::vector<char> DiskMap::read(WAL::ROTransaction &t, whl::string &key,
+std::vector<char> DiskMap::read(WAL::ROTransaction &t, const std::string &key,
                                 bool &found) {
   return read_part(t, key, 0, -1UL, found);
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-whl::vector<char> DiskMap::read_part(WAL::ROTransaction &t, whl::string &key,
-                                     size_t read_offset, size_t read_length,
-                                     bool &found) {
+std::vector<char> DiskMap::read_part(WAL::ROTransaction &t,
+                                     const std::string &key, size_t read_offset,
+                                     size_t read_length, bool &found) {
   int parent_entry{};
   int parent_depth{};
   auto parent = find_parent(t, key, parent_entry, parent_depth);
@@ -620,7 +681,7 @@ whl::vector<char> DiskMap::read_part(WAL::ROTransaction &t, whl::string &key,
 
   if (get_msb(parent_entry_value)) {
     found = false;
-    return whl::vector<char>();
+    return std::vector<char>();
   }
 
   WAL::ROPageHandle<LeafNodeStartPage> leaf =
@@ -629,22 +690,22 @@ whl::vector<char> DiskMap::read_part(WAL::ROTransaction &t, whl::string &key,
 
   if (entry_offset == -1) {
     found = false;
-    return whl::vector<char>();
+    return std::vector<char>();
   }
 
   int offset = entry_offset + key.size() + 1;
   uint64_t length =
       *reinterpret_cast<const uint64_t *>(leaf.ro_data()->data + offset);
   read_length =
-      whl::min(read_length, static_cast<size_t>(length - read_offset));
+      std::min(read_length, static_cast<size_t>(length - read_offset));
   offset += sizeof(uint64_t);
 
-  whl::vector<char> buffer(read_length);
+  std::vector<char> buffer(read_length);
   if (leaf.ro_data()->next != 0) {
     BigValue bv(&t, leaf.get_page(), offset);
-    bv.read(read_offset, buffer.data_ptr(), read_length);
+    bv.read(read_offset, buffer.data(), read_length);
   } else {
-    memcpy(buffer.data_ptr(), leaf.ro_data()->data + offset + read_offset,
+    memcpy(buffer.data(), leaf.ro_data()->data + offset + read_offset,
            read_length);
   }
 
@@ -652,7 +713,7 @@ whl::vector<char> DiskMap::read_part(WAL::ROTransaction &t, whl::string &key,
   return buffer;
 }
 
-size_t DiskMap::read_value_length(WAL::ROTransaction &t, whl::string &key,
+size_t DiskMap::read_value_length(WAL::ROTransaction &t, const std::string &key,
                                   bool &found) {
   int parent_entry{};
   int parent_depth{};
@@ -681,7 +742,8 @@ size_t DiskMap::read_value_length(WAL::ROTransaction &t, whl::string &key,
   return length;
 }
 
-bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
+bool DiskMap::remove(WAL::RWTransaction &t, const std::string &key) {
+  op_count++;
   // ROOT_PAGE marked as internal with MSB set
   WAL::PageHandle<InternalNodePage> parent =
       t.get_page<InternalNodePage>(ROOT_PAGE);
@@ -703,7 +765,7 @@ bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
     depth++;
     if (get_msb(parent_entry_value)) {
       // The next node is an internal node
-      grandparent = whl::move(parent);
+      grandparent = std::move(parent);
       parent = t.get_page<InternalNodePage>(clear_msb(parent_entry_value));
     } else {
       // The next node is a leaf node
@@ -762,11 +824,11 @@ bool DiskMap::remove(WAL::RWTransaction &t, whl::string &key) {
     size_t bytes_to_move = leaf.ro_data()->usage - next_entry_offset;
 
     // Move bytes_to_move bytes from next_entry_offset left by entry_size
-    whl::vector<char> write_buffer(bytes_to_move + entry_size);
-    memcpy(write_buffer.data_ptr(), leaf.ro_data()->data + next_entry_offset,
+    std::vector<char> write_buffer(bytes_to_move + entry_size);
+    memcpy(write_buffer.data(), leaf.ro_data()->data + next_entry_offset,
            bytes_to_move); // Leave last entry_size bytes at 0
     leaf.write(&LeafNodeStartPage::data, entry_offset, write_buffer.size(),
-               write_buffer.data_ptr());
+               write_buffer.data());
 
     // Update usage and entry count
     leaf.write(&LeafNodeStartPage::usage, leaf.ro_data()->usage - entry_size);
@@ -865,37 +927,42 @@ DiskMap::ROTransaction DiskMap::begin_ro_transaction() {
 
 // DiskMap::ROTransaction
 
-DiskMap::ROTransaction::ROTransaction(DiskMap *dm,
-                                      whl::rw_mutex_guard::Mode mode)
-    : dm(dm), guard(&dm->global_lock, mode) {}
-
-DiskMap::ROTransaction::ROTransaction(DiskMap *dm)
-    : ROTransaction(dm, whl::rw_mutex_guard::Mode::READ) {
-  tx = whl::move(dm->wal_layer->begin_ro_transaction());
+DiskMap::ROTransaction::ROTransaction(DiskMap *dm, bool read_lock) : dm(dm) {
+  if (read_lock) {
+    guard = std::shared_lock<std::shared_mutex>(dm->global_lock);
+  }
+  // Otherwise leave uninitialized, RWTransaction will use unique_lock
 }
 
-static whl::unique_ptr<WAL::ROTransaction>
-ro_cast(whl::unique_ptr<WAL::RWTransaction> tx) {
-  return whl::unique_ptr<WAL::ROTransaction>(tx.release());
+DiskMap::ROTransaction::ROTransaction(DiskMap *dm) : ROTransaction(dm, true) {
+  tx = std::make_unique<WAL::ROTransaction>(
+      dm->wal_layer->begin_ro_transaction());
 }
 
-whl::vector<char> DiskMap::ROTransaction::read_part(whl::string key,
+static std::unique_ptr<WAL::ROTransaction>
+ro_cast(std::unique_ptr<WAL::RWTransaction> tx) {
+  return std::unique_ptr<WAL::ROTransaction>(tx.release());
+}
+
+std::vector<char> DiskMap::ROTransaction::read_part(const std::string &key,
                                                     size_t offset,
                                                     size_t length,
                                                     bool &found) {
   return dm->read_part(*tx, key, offset, length, found);
 }
 
-size_t DiskMap::ROTransaction::read_value_length(whl::string key, bool &found) {
-  return dm->read_value_length(*tx, key, found);
+size_t DiskMap::ROTransaction::read_value_length(const std::string &key,
+                                                 bool &found) {
+  return DiskMap::read_value_length(*tx, key, found);
 }
 
-whl::vector<char> DiskMap::ROTransaction::read(whl::string key, bool &found) {
+std::vector<char> DiskMap::ROTransaction::read(const std::string &key,
+                                               bool &found) {
   return dm->read(*tx, key, found);
 }
 
-whl::vector<KVEntry> DiskMap::ROTransaction::sample(size_t count) {
-  return dm->sample(*tx, count);
+std::vector<KVEntry> DiskMap::ROTransaction::sample(size_t count) {
+  return DiskMap::sample(*tx, count);
 }
 
 void DiskMap::ROTransaction::debug_dump() { dm->debug_dump(*tx); }
@@ -903,36 +970,40 @@ void DiskMap::ROTransaction::debug_dump() { dm->debug_dump(*tx); }
 // DiskMap::RWTransaction
 
 DiskMap::RWTransaction::RWTransaction(DiskMap *dm)
-    : ROTransaction(dm, whl::rw_mutex_guard::Mode::WRITE) {
-  tx = ro_cast(whl::move(dm->wal_layer->begin_rw_transaction()));
+    : ROTransaction(dm, false), guard(dm->global_lock) {
+  tx = std::make_unique<WAL::RWTransaction>(
+      dm->wal_layer->begin_rw_transaction());
 }
 
 void DiskMap::RWTransaction::commit() {
   dynamic_cast<WAL::RWTransaction *>(tx.get())->commit();
+  // verify_integrity(*tx);
+  guard.unlock();
 }
 
 void DiskMap::RWTransaction::abort() {
   dynamic_cast<WAL::RWTransaction *>(tx.get())->abort();
+  guard.unlock();
 }
 
-void DiskMap::RWTransaction::write(whl::string key, const void *buffer,
+void DiskMap::RWTransaction::write(const std::string &key, const void *buffer,
                                    size_t length) {
   dm->write(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key, buffer, length);
 }
 
-void DiskMap::RWTransaction::write_part(whl::string key, size_t offset,
+void DiskMap::RWTransaction::write_part(const std::string &key, size_t offset,
                                         const void *buffer, size_t length) {
   dm->write_part(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key, offset,
                  buffer, length);
 }
 
-void DiskMap::RWTransaction::append(whl::string key, void *buffer,
+void DiskMap::RWTransaction::append(const std::string &key, void *buffer,
                                     size_t length) {
   dm->append(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key, buffer,
              length);
 }
 
-bool DiskMap::RWTransaction::remove(whl::string key) {
+bool DiskMap::RWTransaction::remove(const std::string &key) {
   return dm->remove(*dynamic_cast<WAL::RWTransaction *>(tx.get()), key);
 }
 
