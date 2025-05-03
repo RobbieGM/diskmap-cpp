@@ -431,10 +431,11 @@ void DiskMap::free_leaf(WAL::RWTransaction &t, int64_t page_number) {
   int order = 0;
   while (true) {
     auto page = t.get_page<LeafNodeContinuationPage>(page_number);
+    int64_t next = page.ro_data()->next;
     SpaceManager::free(t, page_number, order++);
-    if (page.ro_data()->next == 0)
+    if (next == 0)
       break;
-    page_number = page.ro_data()->next;
+    page_number = next;
   }
 }
 
