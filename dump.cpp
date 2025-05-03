@@ -20,7 +20,7 @@ int main(int argc, const char *argv[]) {
       printf("Key '%s' not found", key.c_str());
       return 1;
     }
-    write(1, value.data_ptr(), value.size());
+    write(1, value.data(), value.size());
   }
   return 0;
 }
