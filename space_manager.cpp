@@ -55,7 +55,7 @@ int64_t SpaceManager::allocate(WAL::RWTransaction &t, order_t order) {
 }
 
 void SpaceManager::free(WAL::RWTransaction &t, int64_t page, order_t order) {
-  if (page <= 1) {
+  if (page < MAX_ORDER + 3) {
     throw DiskMapException("free: cannot free reserved pages");
   }
 
